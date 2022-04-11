@@ -8,11 +8,11 @@ const(
 )
 
 type Task struct {
-	nMap     int
-	nReduce  int
-	seq      int
-	phase    TaskPhase
-	filename string
+	NMap     int
+	NReduce  int
+	Seq      int
+	Phase    TaskPhase
+	Filename string
 }
 
 func Max(a, b int) int {

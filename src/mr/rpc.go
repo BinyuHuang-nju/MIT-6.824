@@ -24,11 +24,11 @@ type ExampleReply struct {
 
 // Add your RPC definitions here.
 type TaskArgs struct {
-	workerId int
+	WorkerId int
 }
 
 type TaskReply struct {
-	task *Task
+	Task *Task
 }
 
 type RegisterArgs struct {
@@ -36,13 +36,13 @@ type RegisterArgs struct {
 }
 
 type RegisterReply struct {
-	workerId int
+	WorkerId int
 }
 
 type ReportArgs struct {
-	seq      int
-	workerId int
-	phase    TaskPhase
+	Seq      int
+	WorkerId int
+	Phase    TaskPhase
 	Success  bool
 }
 

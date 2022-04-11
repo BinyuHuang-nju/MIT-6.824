@@ -46,11 +46,17 @@ type Coordinator struct {
 func (c *Coordinator) initMapTask() {
 	c.taskPhase = MapPhase
 	c.taskStatus = make([]TaskStatus, len(c.files))
+	for i := 0; i < len(c.files); i++ {
+		c.taskStatus[i].state = TaskStateIdle
+	}
 }
 
 func (c *Coordinator) initReduceTask() {
 	c.taskPhase = ReducePhase
 	c.taskStatus = make([]TaskStatus, c.nReduce)
+	for i := 0; i < c.nReduce; i++ {
+		c.taskStatus[i].state = TaskStateIdle
+	}
 }
 
 func (c *Coordinator) scheduleOneTask(taskSeq, workerId int) {
@@ -60,23 +66,93 @@ func (c *Coordinator) scheduleOneTask(taskSeq, workerId int) {
 	c.taskStatus[taskSeq].workerId = workerId
 	c.taskStatus[taskSeq].startTime = time.Now()
 }
+func (c *Coordinator) generateOneTask(taskSeq int) Task {
+	task := Task{
+		NMap:     len(c.files),
+		NReduce:  c.nReduce,
+		Seq:      taskSeq,
+		Phase:    c.taskPhase,
+		Filename: "",
+	}
+	if c.taskPhase == MapPhase {
+		task.Filename = c.files[taskSeq]
+	}
+	return task
+}
 
-func (c *Coordinator) registerWorker(args *RegisterArgs, reply *RegisterReply) error {
+func (c *Coordinator) RegisterWorker(args *RegisterArgs, reply *RegisterReply) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	reply.workerId = c.workerCount
+	reply.WorkerId = c.workerCount
 	c.workerCount += 1
 	return nil
 }
-func (c *Coordinator) requestTaskHandle(args *TaskArgs, reply *TaskReply) error {
+func (c *Coordinator) RequestTaskHandle(args *TaskArgs, reply *TaskReply) error {
 	task := <-c.taskCh
-	if task.phase != c.taskPhase {
+	if task.Phase != c.taskPhase {
 		log.Fatal(" one taskPhase not equals master's taskPhase.")
 	}
-	c.scheduleOneTask(task.seq, args.workerId)
-	reply.task = &task
+	c.scheduleOneTask(task.Seq, args.WorkerId)
+	reply.Task = &task
 	return nil
 }
+func (c *Coordinator) ReportTaskHandle(args *ReportArgs, reply *ReportReply) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.taskPhase != args.Phase || c.taskStatus[args.Seq].workerId != args.WorkerId {
+		return nil
+	}
+	if c.taskStatus[args.Seq].state != TaskStateRunning {
+		return nil
+	}
+	if args.Success {
+		c.taskStatus[args.Seq].state = TaskStateCompleted
+	} else {
+		c.taskStatus[args.Seq].state = TaskStateIdle
+	}
+	go c.schedule()
+	return nil
+}
+
+func (c *Coordinator) tickSchedule() {
+	for !c.done {
+		go c.schedule()
+		time.Sleep(ScheduleInterval)
+	}
+}
+
+func (c *Coordinator) schedule() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	allCompleted := true
+	for idx, status := range c.taskStatus {
+		switch status.state {
+		case TaskStateIdle:
+			allCompleted = false
+			c.taskStatus[idx].state = TaskStateQueued
+			c.taskCh <- c.generateOneTask(idx)
+		case TaskStateQueued:
+			allCompleted = false
+		case TaskStateRunning:
+			allCompleted = false
+			if time.Now().Sub(status.startTime) > TaskMaxRuntime {
+				c.taskStatus[idx].state = TaskStateQueued
+				c.taskCh <- c.generateOneTask(idx)
+			}
+		case TaskStateCompleted:
+		}
+	}
+	if allCompleted {
+		if c.taskPhase == MapPhase {
+			c.taskPhase = ReducePhase
+			c.initReduceTask()
+		} else {
+			c.done = true
+		}
+	}
+}
+
 //
 // an example RPC handler.
 //
@@ -131,8 +207,14 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	b := Max(len(files), nReduce)
 	c.taskCh = make(chan Task, b)
 	c.workerCount = 0
+	/*
+		err := os.Mkdir("mr-tmp",0666)
+		if err != nil {
+			log.Fatal("cannot create dir mr-tmp")
+		}
+	*/
 	c.initMapTask()
-	go c.tickShedule()
+	go c.tickSchedule()
 
 	c.server()
 	return &c
