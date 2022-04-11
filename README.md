@@ -39,7 +39,11 @@ MIT 6.824 课程的学习资料 代码更新为2021版
 - [Fault-Tolerant Virtual Machines(2010)](https://pdos.csail.mit.edu/6.824/papers/vm-ft.pdf)
 - [Raft Extended(2014)](https://pdos.csail.mit.edu/6.824/papers/raft-extended.pdf)
 
+## lab
 
+### lab1
+-	[MIT lab-mr](http://nil.csail.mit.edu/6.824/2020/labs/lab-mr.html)  
+-	MapReduce Paper(OSDI'06)  
 
 ## 学习小组 Group
 

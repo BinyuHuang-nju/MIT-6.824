@@ -4,7 +4,10 @@ import "fmt"
 import "log"
 import "net/rpc"
 import "hash/fnv"
-
+import (
+	"sort"
+	"io/ioutil"
+)
 
 //
 // Map functions return a slice of KeyValue.
@@ -24,6 +27,11 @@ func ihash(key string) int {
 	return int(h.Sum32() & 0x7fffffff)
 }
 
+type worker struct {
+	id      int
+	mapf    func(string, string) []KeyValue
+	reducef func(string, []string) string
+}
 
 //
 // main/mrworker.go calls this function.
@@ -32,10 +40,51 @@ func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
 	// Your worker implementation here.
-
+	w := worker{}
+	w.id = -1
+	w.mapf = mapf
+	w.reducef = reducef
+	w.register()
+	w.run()
 	// uncomment to send the Example RPC to the coordinator.
 	// CallExample()
 
+}
+// get unique id from master.
+func (w *worker) register() {
+	args := RegisterArgs{}
+	reply := RegisterReply{}
+	if success := call("Coordinator.registerWorker", &args, &reply); !success {
+		log.Fatal("Register failed.")
+	}
+	w.id = reply.workerId
+}
+
+func (w *worker) requestTask() (Task, bool) {
+	args := TaskArgs{}
+	reply := TaskReply{}
+	args.workerId = w.id
+	task := Task{}
+	if success := call("Coordinator.requestTaskHandle", &args, &reply); !success {
+		return task, false
+	}
+	task = *reply.task
+	return task, true
+}
+
+func (w *worker) doTask(t Task) {
+
+}
+
+func (w *worker) run() {
+	for {
+		task, err := w.requestTask()
+		if err == false {
+			fmt.Printf("Worker %d: misson complete.\n", w.id)
+			break
+		}
+		w.doTask(task)
+	}
 }
 
 //
