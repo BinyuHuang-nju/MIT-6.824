@@ -18,11 +18,16 @@ package raft
 //
 
 import (
-//	"bytes"
+	"6.824/labgob"
+	"bytes"
+	"log"
+
+	//	"bytes"
 	"sync"
 	"sync/atomic"
+	"time"
 
-//	"6.824/labgob"
+	//	"6.824/labgob"
 	"6.824/labrpc"
 )
 
@@ -50,9 +55,28 @@ type ApplyMsg struct {
 	SnapshotIndex int
 }
 
+type State int
+const (
+	STATE_FOLLOWER  State = 0
+	STATE_CANDIDATE State = 1
+	STATE_LEADER    State = 2
+)
+
+const (
+	HEARTBEAT_INTERVAL    time.Duration = time.Millisecond * 100
+	ELECTION_TIMEOUT_BASE time.Duration = time.Millisecond * 500
+	LOCK_TIMEOUT          time.Duration = time.Millisecond * 20
+)
+
 //
 // A Go object implementing a single Raft peer.
 //
+type LogEntry struct {
+	index   int
+	term    int
+	Command interface{}
+}
+
 type Raft struct {
 	mu        sync.Mutex          // Lock to protect shared access to this peer's state
 	peers     []*labrpc.ClientEnd // RPC end points of all peers
@@ -63,16 +87,50 @@ type Raft struct {
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
+	state        State
+	// Persistent state on all servers
+	currentTerm  int
+	votedFor     int
+	log          []LogEntry
+	// Volatile state on all servers
+	commitIndex  int
+	lastApplied  int
+	// Volatile state on leaders
+	nextIndex    []int
+	matchIndex   []int
 
+	applyChannel      chan ApplyMsg
+	heartbeatInterval time.Time
+	electionInterval  time.Time
+	lockStartTime     time.Time
+	lockEndTime       time.Time
+	lockType          string
+}
+
+func (rf *Raft) lock(s string) {
+	rf.mu.Lock()
+	rf.lockStartTime = time.Now()
+	rf.lockType = s
+}
+func (rf *Raft) unlock() {
+	defer rf.mu.Unlock()
+	rf.lockEndTime = time.Now()
+}
+func (rf *Raft) checkLock() {
+	if rf.lockEndTime.Before(rf.lockStartTime) && time.Now().Sub(rf.lockStartTime) > LOCK_TIMEOUT {
+		log.Fatalf("Lock get timeout. Check deadlock. lockType: %v", rf.lockType)
+	}
 }
 
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
 
-	var term int
-	var isleader bool
 	// Your code here (2A).
+	rf.lock("GetState")
+	defer rf.unlock()
+	term := rf.currentTerm
+	isleader := rf.state == STATE_LEADER
 	return term, isleader
 }
 
@@ -84,14 +142,14 @@ func (rf *Raft) GetState() (int, bool) {
 func (rf *Raft) persist() {
 	// Your code here (2C).
 	// Example:
-	// w := new(bytes.Buffer)
-	// e := labgob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// data := w.Bytes()
-	// rf.persister.SaveRaftState(data)
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.currentTerm)
+	e.Encode(rf.votedFor)
+	e.Encode(rf.log)
+	data := w.Bytes()
+	rf.persister.SaveRaftState(data)
 }
-
 
 //
 // restore previously persisted state.
@@ -102,17 +160,18 @@ func (rf *Raft) readPersist(data []byte) {
 	}
 	// Your code here (2C).
 	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := labgob.NewDecoder(r)
-	// var xxx
-	// var yyy
-	// if d.Decode(&xxx) != nil ||
-	//    d.Decode(&yyy) != nil {
-	//   error...
-	// } else {
-	//   rf.xxx = xxx
-	//   rf.yyy = yyy
-	// }
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var term int
+	var vote int
+	var entries []LogEntry
+	if d.Decode(&term) != nil || d.Decode(&vote) != nil || d.Decode(&entries) != nil {
+		log.Fatal("read persist failed.")
+	} else {
+		rf.currentTerm = term
+		rf.votedFor = vote
+		rf.log = entries
+	}
 }
 
 
@@ -153,11 +212,23 @@ type RequestVoteReply struct {
 	// Your data here (2A).
 }
 
+type AppendEntriesArgs struct {
+
+}
+
+type AppendEntriesReply struct {
+
+}
+
 //
 // example RequestVote RPC handler.
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
+}
+
+func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+
 }
 
 //
@@ -193,7 +264,10 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 	return ok
 }
-
+func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
+	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	return ok
+}
 
 //
 // the service using Raft (e.g. a k/v server) wants to start
