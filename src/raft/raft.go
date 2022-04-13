@@ -20,6 +20,7 @@ package raft
 import (
 	"6.824/labgob"
 	"6.824/labrpc"
+	"6.824/mr"
 	"bytes"
 	"log"
 	"math/rand"
@@ -63,6 +64,7 @@ const (
 	HEARTBEAT_INTERVAL    time.Duration = time.Millisecond * 100
 	ELECTION_TIMEOUT_BASE int = 500
 	LOCK_TIMEOUT          time.Duration = time.Millisecond * 20
+	DEFAULT_AELENGTH      int = 3  // the maximum amount of entries in AERequest
 )
 
 //
@@ -133,9 +135,34 @@ func (rf *Raft) resetHeartbeatTime() {
 }
 
 func (rf *Raft) becomeFollower(term int) {
-	rf.currentTerm = term
 	rf.state = STATE_FOLLOWER
+	rf.currentTerm = term
 	rf.votedFor = -1
+}
+func (rf *Raft) becomeCandidate() {
+	rf.state = STATE_CANDIDATE
+	rf.currentTerm += 1
+	rf.votedFor = rf.me
+}
+func (rf *Raft) becomeLeader() {
+	// convert to leader
+	rf.lock("becomeLeader")
+	rf.state = STATE_LEADER
+	for i := 0; i < len(rf.peers); i++ {
+		if i == rf.me {
+			continue
+		}
+		rf.nextIndex[i] = len(rf.log) + 1
+		rf.matchIndex[i] = 0
+	}
+	// append a blank command to advance commit
+	rf.appendNewEntry(nil)
+
+	// broadcast heartbeat
+	rf.resetHeartbeatTime()
+	rf.unlock()
+
+	// TODO
 }
 
 // return currentTerm and whether this server
@@ -235,11 +262,18 @@ type RequestVoteReply struct {
 }
 
 type AppendEntriesArgs struct {
-
+	Term         int
+	LeaderId     int
+	PrevLogIndex int
+	PrevLogTerm  int
+	Entries      []LogEntry
+	LeaderCommit int
 }
 
 type AppendEntriesReply struct {
-
+	Term    int
+	Success bool
+	// TODO
 }
 
 //
@@ -319,8 +353,47 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 	return ok
 }
 
-func (rf *Raft) makeRequestVoteArgs() {
-	
+func (rf *Raft) makeRequestVoteArgs() RequestVoteArgs {
+	lastLogIndex := len(rf.log)
+	lastLogTerm := -1
+	if lastLogIndex > 0 {
+		lastLogTerm = rf.log[lastLogIndex-1].term
+	}
+	args := RequestVoteArgs{
+		Term:         rf.currentTerm,
+		CandidateId:  rf.me,
+		LastLogIndex: lastLogIndex,
+		LastLogTerm:  lastLogTerm,
+	}
+	return args
+}
+func (rf *Raft) makeAppendEntriesArgs(target int, isHeartbeat bool) AppendEntriesArgs {
+	// TODO
+	entries := make([]LogEntry, 0)
+	if !isHeartbeat {
+		length := Max()
+	}
+	args := AppendEntriesArgs{
+		Term:         rf.currentTerm,
+		LeaderId:     rf.me,
+		PrevLogIndex: 0,
+		PrevLogTerm:  0,
+		Entries:      entries,
+		LeaderCommit: rf.commitIndex,
+	}
+	return args
+}
+
+func (rf *Raft) appendNewEntry(command interface{}) {
+	entry := LogEntry{
+		index:   len(rf.log) + 1,
+		term:    rf.currentTerm,
+		Command: command,
+	}
+	rf.log = append(rf.log, entry)
+	rf.persist()
+	rf.nextIndex[rf.me] = entry.index + 1
+	rf.matchIndex[rf.me] = entry.index
 }
 
 //
@@ -347,29 +420,93 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		return index, term, isLeader
 	}
 	// Your code here (2B).
-	entry := LogEntry{
-		index:   index,
-		term:    term,
-		Command: command,
-	}
-	rf.log = append(rf.log, entry)
-	rf.persist() // call persist() since log has been updated
-	rf.nextIndex[rf.me] = index + 1
-	rf.matchIndex[rf.me] = index
+	rf.appendNewEntry(command)
 	return index, term, isLeader
 }
 
 func (rf *Raft) startElection() {
-	rf.lock("startElection")
+	rf.lock("startElection1")
 	rf.resetElectionTime()
 	if rf.state == STATE_LEADER {
 		rf.unlock()
 		return
 	}
-	rf.state = STATE_CANDIDATE
-	rf.currentTerm += 1
-	rf.votedFor = rf.me
+	// become candidate and update term
+	rf.becomeCandidate()
+	rf.persist()
+	args := rf.makeRequestVoteArgs()
+	rf.unlock()
 
+	// synchronously send RequestVote to all other servers
+	replyCh := make(chan *RequestVoteReply, len(rf.peers))
+	mu := sync.Mutex{}
+	open := true
+	for i := 0; i < len(rf.peers); i++ {
+		if i == rf.me {
+			continue
+		}
+		go func(target int, replyCh chan *RequestVoteReply) {
+			reply := &RequestVoteReply{}
+			received := false
+			timeout := time.NewTimer(rf.electionInterval - HEARTBEAT_INTERVAL)
+			for !received {
+				select {
+				case <-timeout.C:
+					break
+				default:
+					received = rf.sendRequestVote(target, &args, reply)
+				}
+				time.Sleep(20 * time.Millisecond)
+				if rf.state == STATE_FOLLOWER {
+					return
+				}
+			}
+			if received {
+				mu.Lock()
+				if open {
+					replyCh <- reply
+				}
+				mu.Unlock()
+			}
+		}(i, replyCh)
+	}
+
+	// wait for responses
+	time.Sleep(rf.electionInterval - HEARTBEAT_INTERVAL)
+	mu.Lock()
+	open = false
+	close(replyCh)
+	mu.Unlock()
+
+	// process all the responses received
+	rf.lock("startElection2")
+	if rf.state == STATE_FOLLOWER {
+		rf.unlock()
+		return
+	}
+	voteNum, thresh := 1, len(rf.peers)/2 + 1
+	for reply := range replyCh {
+		if reply.Term > rf.currentTerm {
+			rf.becomeFollower(reply.Term)
+			break
+		}
+		if reply.VoteGranted {
+			voteNum += 1
+		}
+	}
+	if rf.state == STATE_FOLLOWER {
+		rf.persist()
+		rf.resetElectionTime()
+		rf.unlock()
+		return
+	}
+	if voteNum < thresh {
+		rf.unlock()
+		return
+	}
+	// receive vote from majority of servers, become leader.
+	// append a blank entry and broadcast AppendEntriesRequest immediately.
+	rf.becomeLeader()
 }
 
 func (rf *Raft) advanceCommitIndex() {
