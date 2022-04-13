@@ -19,16 +19,13 @@ package raft
 
 import (
 	"6.824/labgob"
+	"6.824/labrpc"
 	"bytes"
 	"log"
-
-	//	"bytes"
+	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	//	"6.824/labgob"
-	"6.824/labrpc"
 )
 
 
@@ -64,7 +61,7 @@ const (
 
 const (
 	HEARTBEAT_INTERVAL    time.Duration = time.Millisecond * 100
-	ELECTION_TIMEOUT_BASE time.Duration = time.Millisecond * 500
+	ELECTION_TIMEOUT_BASE int = 500
 	LOCK_TIMEOUT          time.Duration = time.Millisecond * 20
 )
 
@@ -93,15 +90,17 @@ type Raft struct {
 	votedFor     int
 	log          []LogEntry
 	// Volatile state on all servers
-	commitIndex  int
-	lastApplied  int
+	commitIndex  int                 // initialized to 0, increases monotonically
+	lastApplied  int                 // initialized to 0, increases monotonically
 	// Volatile state on leaders
-	nextIndex    []int
-	matchIndex   []int
+	nextIndex    []int               // index of the next log entry to send to one server
+	matchIndex   []int               // index of highest log entry known to be replicated on server
 
-	applyChannel      chan ApplyMsg
-	heartbeatInterval time.Time
-	electionInterval  time.Time
+	applyChannel      chan ApplyMsg  // for those committed entries being applied to state machine
+	heartbeatTime     *time.Timer
+	electionInterval  time.Duration  // randomized election timeout
+	electionTime      *time.Timer
+	// variables for lock
 	lockStartTime     time.Time
 	lockEndTime       time.Time
 	lockType          string
@@ -120,6 +119,23 @@ func (rf *Raft) checkLock() {
 	if rf.lockEndTime.Before(rf.lockStartTime) && time.Now().Sub(rf.lockStartTime) > LOCK_TIMEOUT {
 		log.Fatalf("Lock get timeout. Check deadlock. lockType: %v", rf.lockType)
 	}
+}
+
+// called when meeting 3 conditions:
+// 1. receive AERequest(term >= mine); (see TODO)
+// 2. start an election; (see startElection)
+// 3. grant a vote to another peer. (see RequestVote)
+func (rf *Raft) resetElectionTime() {
+	rf.electionTime.Reset(rf.electionInterval)
+}
+func (rf *Raft) resetHeartbeatTime() {
+	rf.heartbeatTime.Reset(HEARTBEAT_INTERVAL)
+}
+
+func (rf *Raft) becomeFollower(term int) {
+	rf.currentTerm = term
+	rf.state = STATE_FOLLOWER
+	rf.votedFor = -1
 }
 
 // return currentTerm and whether this server
@@ -202,6 +218,10 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 //
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
+	Term         int
+	CandidateId  int
+	LastLogIndex int
+	LastLogTerm  int
 }
 
 //
@@ -210,6 +230,8 @@ type RequestVoteArgs struct {
 //
 type RequestVoteReply struct {
 	// Your data here (2A).
+	Term        int
+	VoteGranted bool
 }
 
 type AppendEntriesArgs struct {
@@ -225,6 +247,34 @@ type AppendEntriesReply struct {
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
+	rf.lock("RequestVote")
+	defer rf.unlock()
+	if args.Term < rf.currentTerm {
+		reply.Term = rf.currentTerm
+		reply.VoteGranted = false
+	} else {
+		if args.Term > rf.currentTerm {
+			// update term, state and votedFor
+			rf.becomeFollower(args.Term)
+		}
+		reply.Term = rf.currentTerm
+		reply.VoteGranted = false
+		// votedFor \in {Nil, candidate} && candidate's log is at least as up-to-date as mine.
+		if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
+			lastLogIndex := len(rf.log)
+			lastLogTerm := -1
+			if lastLogIndex > 0 {
+				lastLogTerm = rf.log[lastLogIndex-1].term
+			}
+			if args.LastLogTerm > lastLogTerm || (args.LastLogTerm == lastLogTerm && args.LastLogIndex >= lastLogIndex) {
+				rf.votedFor = args.CandidateId
+				reply.VoteGranted = true
+				rf.resetElectionTime()
+			}
+		}
+		// call persist() since currentTerm and votedFor may have been updated
+		rf.persist()
+	}
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
@@ -269,6 +319,10 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 	return ok
 }
 
+func (rf *Raft) makeRequestVoteArgs() {
+	
+}
+
 //
 // the service using Raft (e.g. a k/v server) wants to start
 // agreement on the next command to be appended to Raft's log. if this
@@ -284,14 +338,46 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 // the leader.
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	index := -1
-	term := -1
-	isLeader := true
-
+	rf.lock("ClientRequest")
+	defer rf.unlock()
+	index := len(rf.log) + 1
+	term := rf.currentTerm
+	isLeader := rf.state == STATE_LEADER
+	if !isLeader {
+		return index, term, isLeader
+	}
 	// Your code here (2B).
-
-
+	entry := LogEntry{
+		index:   index,
+		term:    term,
+		Command: command,
+	}
+	rf.log = append(rf.log, entry)
+	rf.persist() // call persist() since log has been updated
+	rf.nextIndex[rf.me] = index + 1
+	rf.matchIndex[rf.me] = index
 	return index, term, isLeader
+}
+
+func (rf *Raft) startElection() {
+	rf.lock("startElection")
+	rf.resetElectionTime()
+	if rf.state == STATE_LEADER {
+		rf.unlock()
+		return
+	}
+	rf.state = STATE_CANDIDATE
+	rf.currentTerm += 1
+	rf.votedFor = rf.me
+
+}
+
+func (rf *Raft) advanceCommitIndex() {
+
+}
+
+func (rf *Raft) applyCommittedEntries() {
+
 }
 
 //
@@ -323,8 +409,17 @@ func (rf *Raft) ticker() {
 		// Your code here to check if a leader election should
 		// be started and to randomize sleeping time using
 		// time.Sleep().
-
+		select {
+		case <-rf.electionTime.C:
+			rf.startElection()
+		default:
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
+}
+
+func (rf *Raft) run() {
+
 }
 
 //
@@ -346,13 +441,41 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here (2A, 2B, 2C).
+	rf.mu = sync.Mutex{}
+	rf.dead = 0
+	rf.state = STATE_FOLLOWER
+	rf.currentTerm = -1
+	rf.votedFor = -1
+	rf.log = []LogEntry{}
+	rf.commitIndex = 0
+	rf.lastApplied = 0
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
+	rf.nextIndex = make([]int, len(rf.peers))
+	rf.matchIndex = make([]int, len(rf.peers))
+	rf.applyChannel = applyCh
+	rf.electionInterval = time.Duration(rand.Int()%ELECTION_TIMEOUT_BASE + ELECTION_TIMEOUT_BASE) * time.Millisecond
+	rf.electionTime = time.NewTimer(rf.electionInterval)
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
-
+	// start run goroutine to start log replication
+	go rf.run()
+	// start this goroutine to apply committed entries
+	go func () {
+		for !rf.killed() {
+			rf.applyCommittedEntries()
+			time.Sleep()
+		}
+	}()
+	// start this goroutine to check deadlock
+	go func() {
+		for !rf.killed() {
+			rf.checkLock()
+			time.Sleep(LOCK_TIMEOUT)
+		}
+	}()
 
 	return rf
 }
