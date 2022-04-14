@@ -20,8 +20,8 @@ package raft
 import (
 	"6.824/labgob"
 	"6.824/labrpc"
-	"6.824/mr"
 	"bytes"
+	"fmt"
 	"log"
 	"math/rand"
 	"sync"
@@ -124,7 +124,7 @@ func (rf *Raft) checkLock() {
 }
 
 // called when meeting 3 conditions:
-// 1. receive AERequest(term >= mine); (see TODO)
+// 1. receive AERequest(term >= mine); (see AppendEntries)
 // 2. start an election; (see startElection)
 // 3. grant a vote to another peer. (see RequestVote)
 func (rf *Raft) resetElectionTime() {
@@ -157,12 +157,10 @@ func (rf *Raft) becomeLeader() {
 	}
 	// append a blank command to advance commit
 	rf.appendNewEntry(nil)
-
-	// broadcast heartbeat
-	rf.resetHeartbeatTime()
 	rf.unlock()
 
-	// TODO
+	// broadcast heartbeat
+	rf.broadcastAppendEntries()
 }
 
 // return currentTerm and whether this server
@@ -271,9 +269,10 @@ type AppendEntriesArgs struct {
 }
 
 type AppendEntriesReply struct {
-	Term    int
-	Success bool
-	// TODO
+	Term        int
+	Success     bool
+	GuideIndex  int  // take effect when !Success, index follower recommends to check next time
+	MatchIndex  int  // take effect when Success
 }
 
 //
@@ -312,7 +311,73 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	rf.lock("AppendEntries")
+	if args.Term < rf.currentTerm {
+		reply.Term = rf.currentTerm
+		reply.Success = false
+		rf.unlock()
+		return
+	}
+	reply.Term = args.Term
+	rf.resetElectionTime()
+	if args.Term == rf.currentTerm && rf.state == STATE_LEADER {
+		rf.unlock()
+		LOG_TwoLeadersInOneTerm()
+	}
+	if args.Term > rf.currentTerm || (args.Term == rf.currentTerm && rf.state == STATE_CANDIDATE) {
+		rf.becomeFollower(args.Term)
+	}
+	logOk := false // true, if entry with (prevLogTerm, prevLogIndex) exists in log
+	if args.PrevLogIndex == 0 ||
+		(args.PrevLogIndex > 0 && args.PrevLogIndex <= len(rf.log) && args.PrevLogTerm == rf.log[args.PrevLogIndex-1].term) {
+		logOk = true
+	}
+	if !logOk {    // logOk == false, so truncate log and return false
+		reply.Success = false
+		reply.GuideIndex = 0
+		if args.PrevLogIndex > 0 {
+			if args.PrevLogIndex > len(rf.log) {
+				reply.GuideIndex = len(rf.log)
+			} else {
+				rf.log = rf.log[:args.PrevLogIndex] // truncate inconsistent entries
+				standardTerm := rf.log[args.PrevLogIndex-1].term
+				i := args.PrevLogIndex-1
+				for ; i > 0; i-- {
+					if rf.log[i-1].term != standardTerm {
+						break
+					}
+				}
+				reply.GuideIndex = i
+			}
+		}
+		rf.unlock()
+	} else {      // logOk == true, so check and append entries
+		reply.Success = true
+		consistent := args.PrevLogIndex + len(args.Entries)
+		reply.MatchIndex = consistent
+		for i, j := args.PrevLogIndex+1, 0; j < len(args.Entries); i, j = i+1, j+1 {
+			if i <= len(rf.log) {
+				// mat exist, e.g. leader: 1 1 2 3 3, follower: 1 1 2 3 3 3 3
+				if rf.log[i-1].term != args.Entries[j].term {
+					rf.log[i-1] = args.Entries[j]
+				}
+			} else {
+				rf.log = append(rf.log, args.Entries[j])
+			}
+		}
+		// truncate subsequent entries if necessary
+		if consistent < len(rf.log) && consistent > 0 && rf.log[consistent-1].term > rf.log[(consistent-1)+1].term {
+			rf.log = rf.log[:consistent]
+		}
 
+		commit := Min(args.LeaderCommit, consistent) // since now, consistent <= len(rf.log)
+		rf.commitIndex = Max(rf.commitIndex, commit) // increases monotonically
+	}
+	rf.persist()
+	rf.unlock()
+
+	// Everytime server receives AERequest and returns true, check if it need apply committed entries.
+	go rf.applyCommittedEntries()
 }
 
 //
@@ -368,16 +433,28 @@ func (rf *Raft) makeRequestVoteArgs() RequestVoteArgs {
 	return args
 }
 func (rf *Raft) makeAppendEntriesArgs(target int, isHeartbeat bool) AppendEntriesArgs {
-	// TODO
+	rf.lock(fmt.Sprintf("makeAppendEntriesArgs(%d)", target))
+	defer rf.unlock()
 	entries := make([]LogEntry, 0)
 	if !isHeartbeat {
-		length := Max()
+		length := Min(len(rf.log)-rf.nextIndex[target]+1, DEFAULT_AELENGTH)
+		if length > 0 {
+			startIndex := rf.nextIndex[target]
+			for i := 0; i < length; i++ {
+				entries = append(entries, rf.log[startIndex-1+i])
+			}
+		}
+	}
+	prevLogIndex := rf.nextIndex[target]-1
+	prevLogTerm := -1
+	if prevLogIndex > 0 {
+		prevLogTerm = rf.log[prevLogIndex-1].term
 	}
 	args := AppendEntriesArgs{
 		Term:         rf.currentTerm,
 		LeaderId:     rf.me,
-		PrevLogIndex: 0,
-		PrevLogTerm:  0,
+		PrevLogIndex: prevLogIndex,
+		PrevLogTerm:  prevLogTerm,
 		Entries:      entries,
 		LeaderCommit: rf.commitIndex,
 	}
@@ -426,12 +503,16 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 func (rf *Raft) startElection() {
 	rf.lock("startElection1")
-	rf.resetElectionTime()
 	if rf.state == STATE_LEADER {
+		rf.resetElectionTime()
 		rf.unlock()
 		return
 	}
 	// become candidate and update term
+	if rf.state == STATE_CANDIDATE { // if candidate, randomize electionTime to avoid split vote
+		rf.electionInterval = time.Duration(rand.Int()%ELECTION_TIMEOUT_BASE + ELECTION_TIMEOUT_BASE) * time.Millisecond
+	}
+	rf.resetElectionTime()
 	rf.becomeCandidate()
 	rf.persist()
 	args := rf.makeRequestVoteArgs()
@@ -456,7 +537,7 @@ func (rf *Raft) startElection() {
 				default:
 					received = rf.sendRequestVote(target, &args, reply)
 				}
-				time.Sleep(20 * time.Millisecond)
+				time.Sleep(HEARTBEAT_INTERVAL)
 				if rf.state == STATE_FOLLOWER {
 					return
 				}
@@ -504,17 +585,101 @@ func (rf *Raft) startElection() {
 		rf.unlock()
 		return
 	}
+	rf.unlock()
 	// receive vote from majority of servers, become leader.
 	// append a blank entry and broadcast AppendEntriesRequest immediately.
 	rf.becomeLeader()
 }
 
-func (rf *Raft) advanceCommitIndex() {
+func (rf *Raft) broadcastAppendEntries() {
+	rf.lock("broadcastAppendEntries")
+	rf.resetHeartbeatTime()
+	rf.unlock()
+	for i := 0; i < len(rf.peers); i++ {
+		if i == rf.me {
+			continue
+		}
+		args := rf.makeAppendEntriesArgs(i, false)
+		go rf.sendAndRcvAppendEntries(i, &args)
+	}
+}
 
+func (rf *Raft) sendAndRcvAppendEntries(target int, args *AppendEntriesArgs) {
+	// send AppendEntriesRequest
+	reply := &AppendEntriesReply{}
+	received := rf.sendAppendEntries(target, args, reply)
+
+	rf.lock("ProcessAppendEntriesResponse")
+	defer rf.unlock()
+	if rf.state != STATE_LEADER {
+		return
+	}
+	// receive and process AppendEntriesResponse
+	if received {
+		if reply.Term > rf.currentTerm {
+			// update term, state and votedFor
+			rf.becomeFollower(reply.Term)
+			rf.persist()
+			rf.resetElectionTime()
+			return
+		}
+		if !reply.Success {
+			// two conditions represent it is re-ordered, so drop the reply:
+			// 1. nextIndex is going back
+			// 2. server has achieved consistency with leader
+			if rf.nextIndex[target]-1 < args.PrevLogIndex || rf.nextIndex[target] == rf.matchIndex[target] + 1 {
+				// ok, drop
+			} else {
+				rf.nextIndex[target] = Min(rf.nextIndex[target], reply.GuideIndex+1)
+			}
+		} else {
+			rf.matchIndex[target] = Max(rf.matchIndex[target], reply.MatchIndex)
+			rf.nextIndex[target] = rf.matchIndex[target] + 1
+		}
+	}
+}
+
+func (rf *Raft) advanceCommitIndex() {
+	rf.lock("advanceCommitIndex")
+	defer rf.unlock()
+	if rf.state != STATE_LEADER || rf.commitIndex == len(rf.log) {
+		return
+	}
+	quorum := len(rf.peers)/2 + 1
+	newCommitted := rf.commitIndex
+	for i := len(rf.log); i > rf.commitIndex; i-- {
+		if rf.log[i-1].term < rf.currentTerm {
+			break  // commit: entry.term == currentTerm && quorum of servers save the entry
+		}
+		meetNum := 0
+		for p := 0; p < len(rf.peers); p++ {
+			if rf.matchIndex[p] >= i {
+				meetNum++
+			}
+		}
+		if meetNum >= quorum {
+			newCommitted = i
+			break
+		}
+	}
+	if newCommitted > rf.commitIndex {
+		rf.commitIndex = newCommitted
+	}
 }
 
 func (rf *Raft) applyCommittedEntries() {
-
+	rf.lock("applyCommittedEntries")
+	defer rf.unlock()
+	if rf.lastApplied < rf.commitIndex {
+		for i := rf.lastApplied + 1; i <= rf.commitIndex; i++ {
+			msg := ApplyMsg{
+				CommandValid:  true,
+				Command:       rf.log[i-1].Command,
+				CommandIndex:  rf.log[i-1].index,
+			}
+			rf.applyChannel <- msg
+		}
+	}
 }
 
 //
@@ -556,7 +721,14 @@ func (rf *Raft) ticker() {
 }
 
 func (rf *Raft) run() {
-
+	for !rf.killed() {
+		select {
+		case <-rf.heartbeatTime.C:
+			rf.broadcastAppendEntries()
+		default:
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 //
@@ -594,6 +766,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.applyChannel = applyCh
 	rf.electionInterval = time.Duration(rand.Int()%ELECTION_TIMEOUT_BASE + ELECTION_TIMEOUT_BASE) * time.Millisecond
 	rf.electionTime = time.NewTimer(rf.electionInterval)
+	rf.heartbeatTime = time.NewTimer(HEARTBEAT_INTERVAL)
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
@@ -602,15 +775,16 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// start this goroutine to apply committed entries
 	go func () {
 		for !rf.killed() {
-			rf.applyCommittedEntries()
-			time.Sleep()
+			rf.advanceCommitIndex()
+			go rf.applyCommittedEntries()
+			time.Sleep(20 * time.Millisecond)
 		}
 	}()
 	// start this goroutine to check deadlock
 	go func() {
 		for !rf.killed() {
 			rf.checkLock()
-			time.Sleep(LOCK_TIMEOUT)
+			time.Sleep(LOCK_TIMEOUT/2)
 		}
 	}()
 
