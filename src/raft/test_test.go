@@ -92,10 +92,10 @@ func TestManyElections2A(t *testing.T) {
 	defer cfg.cleanup()
 
 	cfg.begin("Test (2A): multiple elections")
-
+	// fmt.Println("0")
 	cfg.checkOneLeader()
 
-	iters := 10
+	iters := 30
 	for ii := 1; ii < iters; ii++ {
 		// disconnect three nodes
 		i1 := rand.Int() % servers
@@ -104,7 +104,7 @@ func TestManyElections2A(t *testing.T) {
 		cfg.disconnect(i1)
 		cfg.disconnect(i2)
 		cfg.disconnect(i3)
-
+		fmt.Println(ii)
 		// either the current leader should still be alive,
 		// or the remaining four should elect a new one.
 		cfg.checkOneLeader()
@@ -113,7 +113,7 @@ func TestManyElections2A(t *testing.T) {
 		cfg.connect(i2)
 		cfg.connect(i3)
 	}
-
+	// fmt.Println(iters)
 	cfg.checkOneLeader()
 
 	cfg.end()

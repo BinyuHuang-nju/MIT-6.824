@@ -3,6 +3,7 @@ package raft
 import (
 	"fmt"
 	"log"
+	"strconv"
 )
 
 func Max(a, b int) int {
@@ -26,4 +27,27 @@ func LOG_TwoLeadersInOneTerm() {
 func LOG_InconsistentEntry(me, index, term int) {
 	log.Fatal("event theoretically impossible happens: in append phase, entry with same index inconsistent. " +
 		fmt.Sprintf("peer: %d, index: %d, term: %d", me, index, term))
+}
+
+func (rf* Raft)LOG_ServerDetailedInfo(event string) {
+	log.Println("=== Event "+ strconv.Itoa(rf.eventId) + " START ===")
+	rf.eventId++
+	log.Println("server id: " + strconv.Itoa(rf.me) + ", event: "+ event)
+	log.Println("currentTerm: " + strconv.Itoa(rf.currentTerm) + ", length of log: " + strconv.Itoa(len(rf.log)))
+	log.Println("commitIndex: " + strconv.Itoa(rf.commitIndex) + ", lastApplied: " + strconv.Itoa(rf.lastApplied))
+	if rf.state == STATE_LEADER {
+		log.Println("as leader, nextIndex and matchIndex for each server: ")
+		for i := 0; i < len(rf.peers); i++ {
+			log.Printf("      server %d: %d, %d \n", i, rf.nextIndex[i], rf.matchIndex[i] )
+		}
+	}
+	log.Println("=== Event "+ strconv.Itoa(rf.eventId-1) + " END =====")
+}
+
+func (rf* Raft)LOG_ServerConciseInfo(event string) {
+	log.Println("=== Event "+ strconv.Itoa(rf.eventId) + " START ===")
+	rf.eventId++
+	log.Println("server id: " + strconv.Itoa(rf.me) + ", event: "+ event)
+	log.Println("currentTerm: " + strconv.Itoa(rf.currentTerm) + ", length of log: " + strconv.Itoa(len(rf.log)))
+	log.Println("=== Event "+ strconv.Itoa(rf.eventId-1) + " END =====")
 }
