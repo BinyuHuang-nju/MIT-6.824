@@ -7,15 +7,17 @@ MIT 6.824 课程的学习资料 代码更新为2021版
 ## lab
 
 ### lab1
--	[MIT lab-mr](http://nil.csail.mit.edu/6.824/2020/labs/lab-mr.html)  
 -	MapReduce Paper(OSDI'06)  
--	Pass
+- [x]	Pass
 
 ### lab2  
 -	Raft Paper(Extended 14)  
-- [ ]	2A TestManyElections2A 95%pass  
-- [ ]	2B TestRejoin2B 50%pass
-- [ ]   2C TestPersist22C,TestFigure8Unreliable2C 50%pass
+- [x]	2A pass  
+	- test: sh ./test_election.sh  
+- [x]	2B pass
+	- test: sh ./test_replication.sh  
+- [ ]   2C pass except TestFigure8Unreliable2C
+	- test: sh ./test_persist.sh
 
 ## 课程安排 Schedule
 
