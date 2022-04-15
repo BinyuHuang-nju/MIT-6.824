@@ -93,8 +93,8 @@ type Raft struct {
 	votedFor     int
 	log          []LogEntry
 	// Volatile state on all servers
-	commitIndex  int                 // initialized to 0, increases monotonically
-	lastApplied  int                 // initialized to 0, increases monotonically
+	commitIndex  int                 // initialized to -1, increases monotonically
+	lastApplied  int                 // initialized to -1, increases monotonically
 	// Volatile state on leaders
 	nextIndex    []int               // index of the next log entry to send to one server
 	matchIndex   []int               // index of highest log entry known to be replicated on server
@@ -156,11 +156,11 @@ func (rf *Raft) becomeLeader() {
 		if i == rf.me {
 			continue
 		}
-		rf.nextIndex[i] = len(rf.log) + 1
-		rf.matchIndex[i] = 0
+		rf.nextIndex[i] = len(rf.log)
+		rf.matchIndex[i] = -1
 	}
 	// append a blank command to advance commit
-	rf.appendNewEntry(nil)
+	rf.appendNewEntry(0) // initially set 'nil', and several tests do not allow value not int.
 	// rf.unlock()
 
 	// broadcast heartbeat
@@ -298,10 +298,10 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		reply.VoteGranted = false
 		// votedFor \in {Nil, candidate} && candidate's log is at least as up-to-date as mine.
 		if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
-			lastLogIndex := len(rf.log)
+			lastLogIndex := len(rf.log) - 1
 			lastLogTerm := -1
-			if lastLogIndex > 0 {
-				lastLogTerm = rf.log[lastLogIndex-1].Term
+			if lastLogIndex >= 0 {
+				lastLogTerm = rf.log[lastLogIndex].Term
 			}
 			if args.LastLogTerm > lastLogTerm || (args.LastLogTerm == lastLogTerm && args.LastLogIndex >= lastLogIndex) {
 				rf.votedFor = args.CandidateId
@@ -332,22 +332,22 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.becomeFollower(args.Term)
 	}
 	logOk := false // true, if entry with (prevLogTerm, prevLogIndex) exists in log
-	if args.PrevLogIndex == 0 ||
-		(args.PrevLogIndex > 0 && args.PrevLogIndex <= len(rf.log) && args.PrevLogTerm == rf.log[args.PrevLogIndex-1].Term) {
+	if args.PrevLogIndex == -1 ||
+		(args.PrevLogIndex >= 0 && args.PrevLogIndex < len(rf.log) && args.PrevLogTerm == rf.log[args.PrevLogIndex].Term) {
 		logOk = true
 	}
 	if !logOk {    // logOk == false, so truncate log and return false
 		reply.Success = false
-		reply.GuideIndex = 0
-		if args.PrevLogIndex > 0 {
-			if args.PrevLogIndex > len(rf.log) {
-				reply.GuideIndex = len(rf.log)
+		reply.GuideIndex = -1
+		if args.PrevLogIndex >= 0 {
+			if args.PrevLogIndex >= len(rf.log) {
+				reply.GuideIndex = len(rf.log) - 1
 			} else {
+				standardTerm := rf.log[args.PrevLogIndex].Term
 				rf.log = rf.log[:args.PrevLogIndex] // truncate inconsistent entries
-				standardTerm := rf.log[args.PrevLogIndex-1].Term
 				i := args.PrevLogIndex-1
-				for ; i > 0; i-- {
-					if rf.log[i-1].Term != standardTerm {
+				for ; i >= 0; i-- {
+					if rf.log[i].Term != standardTerm {
 						break
 					}
 				}
@@ -359,21 +359,21 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		consistent := args.PrevLogIndex + len(args.Entries)
 		reply.MatchIndex = consistent
 		for i, j := args.PrevLogIndex+1, 0; j < len(args.Entries); i, j = i+1, j+1 {
-			if i <= len(rf.log) {
+			if i < len(rf.log) {
 				// mat exist, e.g. leader: 1 1 2 3 3, follower: 1 1 2 3 3 3 3
-				if rf.log[i-1].Term != args.Entries[j].Term {
-					rf.log[i-1] = args.Entries[j]
+				if rf.log[i].Term != args.Entries[j].Term {
+					rf.log[i] = args.Entries[j]
 				}
 			} else {
 				rf.log = append(rf.log, args.Entries[j])
 			}
 		}
 		// truncate subsequent entries if necessary
-		if consistent < len(rf.log) && consistent > 0 && rf.log[consistent-1].Term > rf.log[(consistent-1)+1].Term {
-			rf.log = rf.log[:consistent]
+		if consistent + 1 < len(rf.log) && consistent >= 0 && rf.log[consistent].Term > rf.log[consistent+1].Term {
+			rf.log = rf.log[:(consistent+1)]
 		}
 
-		commit := Min(args.LeaderCommit, consistent) // since now, consistent <= len(rf.log)
+		commit := Min(args.LeaderCommit, consistent) // since now, consistent < len(rf.log)
 		rf.commitIndex = Max(rf.commitIndex, commit) // increases monotonically
 	}
 	rf.persist()
@@ -422,10 +422,10 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 }
 
 func (rf *Raft) makeRequestVoteArgs() RequestVoteArgs {
-	lastLogIndex := len(rf.log)
+	lastLogIndex := len(rf.log) - 1
 	lastLogTerm := -1
-	if lastLogIndex > 0 {
-		lastLogTerm = rf.log[lastLogIndex-1].Term
+	if lastLogIndex >= 0 {
+		lastLogTerm = rf.log[lastLogIndex].Term
 	}
 	args := RequestVoteArgs{
 		Term:         rf.currentTerm,
@@ -441,18 +441,18 @@ func (rf *Raft) makeAppendEntriesArgs(target int, isHeartbeat bool) AppendEntrie
 //	rf.LOG_ServerDetailedInfo("makeAppendEntriesArgs")
 	entries := make([]LogEntry, 0)
 	if !isHeartbeat {
-		length := Min(len(rf.log)-rf.nextIndex[target]+1, DEFAULT_AELENGTH)
+		length := Min(len(rf.log)-rf.nextIndex[target], DEFAULT_AELENGTH)
 		if length > 0 {
 			startIndex := rf.nextIndex[target]
 			for i := 0; i < length; i++ {
-				entries = append(entries, rf.log[startIndex-1+i])
+				entries = append(entries, rf.log[startIndex+i])
 			}
 		}
 	}
 	prevLogIndex := rf.nextIndex[target]-1
 	prevLogTerm := -1
-	if prevLogIndex > 0 {
-		prevLogTerm = rf.log[prevLogIndex-1].Term
+	if prevLogIndex >= 0 {
+		prevLogTerm = rf.log[prevLogIndex].Term
 	}
 	args := AppendEntriesArgs{
 		Term:         rf.currentTerm,
@@ -467,7 +467,7 @@ func (rf *Raft) makeAppendEntriesArgs(target int, isHeartbeat bool) AppendEntrie
 
 func (rf *Raft) appendNewEntry(command interface{}) {
 	entry := LogEntry{
-		Index:   len(rf.log) + 1,
+		Index:   len(rf.log),
 		Term:    rf.currentTerm,
 		Command: command,
 	}
@@ -494,7 +494,7 @@ func (rf *Raft) appendNewEntry(command interface{}) {
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.lock("ClientRequest")
 	defer rf.unlock()
-	index := len(rf.log) + 1
+	index := len(rf.log)
 	term := rf.currentTerm
 	isLeader := rf.state == STATE_LEADER
 	if !isLeader {
@@ -502,6 +502,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	}
 	// Your code here (2B).
 	rf.appendNewEntry(command)
+	// rf.LOG_ServerDetailedInfo(fmt.Sprintf("Start, index: %d", index))
 	return index, term, isLeader
 }
 
@@ -595,6 +596,11 @@ func (rf *Raft) startElection() {
 	rf.unlock()
 	// broadcast AppendEntriesRequest immediately.
 	rf.broadcastAppendEntries()
+	/*
+	rf.lock("endOfStartElection")
+	rf.LOG_ServerDetailedInfo("endOfStartElection")
+	rf.unlock()
+	 */
 }
 
 func (rf *Raft) broadcastAppendEntries() {
@@ -652,13 +658,13 @@ func (rf *Raft) sendAndRcvAppendEntries(target int, args *AppendEntriesArgs) {
 func (rf *Raft) advanceCommitIndex() {
 	rf.lock("advanceCommitIndex")
 	defer rf.unlock()
-	if rf.state != STATE_LEADER || rf.commitIndex == len(rf.log) {
+	if rf.state != STATE_LEADER || rf.commitIndex == len(rf.log)-1 {
 		return
 	}
 	quorum := len(rf.peers)/2 + 1
 	newCommitted := rf.commitIndex
-	for i := len(rf.log); i > rf.commitIndex; i-- {
-		if rf.log[i-1].Term < rf.currentTerm {
+	for i := len(rf.log)-1; i > rf.commitIndex; i-- {
+		if rf.log[i].Term < rf.currentTerm {
 			break  // commit: entry.term == currentTerm && quorum of servers save the entry
 		}
 		meetNum := 0
@@ -684,11 +690,12 @@ func (rf *Raft) applyCommittedEntries() {
 		for i := rf.lastApplied + 1; i <= rf.commitIndex; i++ {
 			msg := ApplyMsg{
 				CommandValid:  true,
-				Command:       rf.log[i-1].Command,
-				CommandIndex:  rf.log[i-1].Index,
+				Command:       rf.log[i].Command,
+				CommandIndex:  rf.log[i].Index,
 			}
 			rf.applyChannel <- msg
 		}
+		rf.lastApplied = rf.commitIndex
 	}
 }
 
@@ -766,8 +773,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.currentTerm = 0
 	rf.votedFor = -1
 	rf.log = []LogEntry{}
-	rf.commitIndex = 0
-	rf.lastApplied = 0
+	rf.commitIndex = -1
+	rf.lastApplied = -1
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
@@ -791,15 +798,27 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			time.Sleep(COMMIT_TIMEOUT)
 		}
 	}()
+
 	// start this goroutine to check deadlock
-	/*
+/*
 	go func() {
 		for !rf.killed() {
 			rf.checkLock()
 			time.Sleep(LOCK_TIMEOUT/2)
 		}
 	}()
-	*/
-
+*/
+/*
+	go func() {
+		for !rf.killed() {
+			rf.lock("log")
+			if rf.state == STATE_LEADER {
+				rf.LOG_ServerDetailedInfo("check")
+			}
+			rf.unlock()
+			time.Sleep(time.Second)
+		}
+	}()
+*/
 	return rf
 }

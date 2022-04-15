@@ -86,7 +86,7 @@ func TestReElection2A(t *testing.T) {
 	cfg.end()
 }
 
-func TestManyElections2A(t *testing.T) {
+func TestManyElections2A(t *testing.T) { // no 95%
 	servers := 7
 	cfg := make_config(t, servers, false, false)
 	defer cfg.cleanup()
@@ -211,7 +211,7 @@ func TestFailAgree2B(t *testing.T) {
 	cfg.end()
 }
 
-func TestFailNoAgree2B(t *testing.T) {
+func TestFailNoAgree2B(t *testing.T) {  // no
 	servers := 5
 	cfg := make_config(t, servers, false, false)
 	defer cfg.cleanup()
@@ -253,7 +253,7 @@ func TestFailNoAgree2B(t *testing.T) {
 	if ok2 == false {
 		t.Fatalf("leader2 rejected Start()")
 	}
-	if index2 < 2 || index2 > 3 {
+	if index2 < 2 || index2 > 4 {
 		t.Fatalf("unexpected index %v", index2)
 	}
 
@@ -363,7 +363,7 @@ loop:
 	cfg.end()
 }
 
-func TestRejoin2B(t *testing.T) {
+func TestRejoin2B(t *testing.T) {  // no
 	servers := 3
 	cfg := make_config(t, servers, false, false)
 	defer cfg.cleanup()

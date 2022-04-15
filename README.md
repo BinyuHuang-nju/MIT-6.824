@@ -3,6 +3,20 @@ Basic Sources for MIT 6.824 Distributed Systems Class
 
 MIT 6.824 课程的学习资料 代码更新为2021版
 
+
+## lab
+
+### lab1
+-	[MIT lab-mr](http://nil.csail.mit.edu/6.824/2020/labs/lab-mr.html)  
+-	MapReduce Paper(OSDI'06)  
+-	Pass
+
+### lab2  
+-	Raft Paper(Extended 14)  
+- [ ]	2A TestManyElections2A 95%pass  
+- [ ]	2B TestRejoin2B 50%pass
+- [ ]   2C TestPersist22C,TestFigure8Unreliable2C 50%pass
+
 ## 课程安排 Schedule
 
 [课程安排](https://pdos.csail.mit.edu/6.824/schedule.html)
@@ -39,16 +53,4 @@ MIT 6.824 课程的学习资料 代码更新为2021版
 - [Fault-Tolerant Virtual Machines(2010)](https://pdos.csail.mit.edu/6.824/papers/vm-ft.pdf)
 - [Raft Extended(2014)](https://pdos.csail.mit.edu/6.824/papers/raft-extended.pdf)
 
-## lab
 
-### lab1
--	[MIT lab-mr](http://nil.csail.mit.edu/6.824/2020/labs/lab-mr.html)  
--	MapReduce Paper(OSDI'06)  
-
-### lab2
--	2A TestInitialElection,TestReElection2A pass; TestManyElections2A 90% pass (具体对heartbeat、electionTimeout调参，这里我总是不能调到100%pass，可能代码不够优化)  
-
-## 学习小组 Group
-
-mit6.824自学互助 QQ群：258537180(群已满)
-mit6.824自学互助二群 QQ群：682413790(群已满)
