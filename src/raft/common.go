@@ -31,7 +31,6 @@ func LOG_InconsistentEntry(me, index, term int) {
 
 func (rf* Raft)LOG_ServerDetailedInfo(event string) {
 	log.Println("=== Event "+ strconv.Itoa(rf.eventId) + " START ===")
-	rf.eventId++
 	log.Println("server id: " + strconv.Itoa(rf.me) + ", event: "+ event)
 	log.Println("currentTerm: " + strconv.Itoa(rf.currentTerm) + ", length of log: " + strconv.Itoa(len(rf.log)))
 	log.Println("commitIndex: " + strconv.Itoa(rf.commitIndex) + ", lastApplied: " + strconv.Itoa(rf.lastApplied))
@@ -41,13 +40,14 @@ func (rf* Raft)LOG_ServerDetailedInfo(event string) {
 			log.Printf("      server %d: %d, %d \n", i, rf.nextIndex[i], rf.matchIndex[i] )
 		}
 	}
-	log.Println("=== Event "+ strconv.Itoa(rf.eventId-1) + " END =====")
+	log.Println("=== Event "+ strconv.Itoa(rf.eventId) + " END =====")
+	rf.eventId++
 }
 
 func (rf* Raft)LOG_ServerConciseInfo(event string) {
 	log.Println("=== Event "+ strconv.Itoa(rf.eventId) + " START ===")
-	rf.eventId++
 	log.Println("server id: " + strconv.Itoa(rf.me) + ", event: "+ event)
 	log.Println("currentTerm: " + strconv.Itoa(rf.currentTerm) + ", length of log: " + strconv.Itoa(len(rf.log)))
-	log.Println("=== Event "+ strconv.Itoa(rf.eventId-1) + " END =====")
+	log.Println("=== Event "+ strconv.Itoa(rf.eventId) + " END =====")
+	rf.eventId++
 }

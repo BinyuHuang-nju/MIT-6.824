@@ -61,7 +61,7 @@ const (
 )
 
 const (
-	HEARTBEAT_INTERVAL    time.Duration = time.Millisecond * 100
+	HEARTBEAT_INTERVAL    time.Duration = time.Millisecond * 125
 	ELECTION_TIMEOUT_BASE int = 300
 	LOCK_TIMEOUT          time.Duration = time.Millisecond * 20
 	COMMIT_TIMEOUT	      = time.Millisecond * 50
@@ -130,9 +130,11 @@ func (rf *Raft) checkLock() {
 // 2. start an election; (see startElection)
 // 3. grant a vote to another peer. (see RequestVote)
 func (rf *Raft) resetElectionTime() {
+	rf.electionTime.Stop()
 	rf.electionTime.Reset(rf.electionInterval)
 }
 func (rf *Raft) resetHeartbeatTime() {
+	rf.heartbeatTime.Stop()
 	rf.heartbeatTime.Reset(HEARTBEAT_INTERVAL)
 }
 
@@ -148,7 +150,7 @@ func (rf *Raft) becomeCandidate() {
 }
 func (rf *Raft) becomeLeader() {
 	// convert to leader
-	rf.lock("becomeLeader")
+	// rf.lock("becomeLeader")
 	rf.state = STATE_LEADER
 	for i := 0; i < len(rf.peers); i++ {
 		if i == rf.me {
@@ -159,10 +161,10 @@ func (rf *Raft) becomeLeader() {
 	}
 	// append a blank command to advance commit
 	rf.appendNewEntry(nil)
-	rf.unlock()
+	// rf.unlock()
 
 	// broadcast heartbeat
-	rf.broadcastAppendEntries()
+	// rf.broadcastAppendEntries()
 }
 
 // return currentTerm and whether this server
@@ -540,7 +542,7 @@ func (rf *Raft) startElection() {
 				default:
 					received = rf.sendRequestVote(target, &args, reply)
 				}
-				time.Sleep(HEARTBEAT_INTERVAL)
+				// time.Sleep(HEARTBEAT_INTERVAL)
 				if rf.state == STATE_FOLLOWER {
 					return
 				}
@@ -588,10 +590,11 @@ func (rf *Raft) startElection() {
 		rf.unlock()
 		return
 	}
-	rf.unlock()
-	// receive vote from majority of servers, become leader.
-	// append a blank entry and broadcast AppendEntriesRequest immediately.
+	// receive vote from majority of servers, become leader and append a blank entry.
 	rf.becomeLeader()
+	rf.unlock()
+	// broadcast AppendEntriesRequest immediately.
+	rf.broadcastAppendEntries()
 }
 
 func (rf *Raft) broadcastAppendEntries() {

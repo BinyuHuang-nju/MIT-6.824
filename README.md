@@ -45,6 +45,9 @@ MIT 6.824 课程的学习资料 代码更新为2021版
 -	[MIT lab-mr](http://nil.csail.mit.edu/6.824/2020/labs/lab-mr.html)  
 -	MapReduce Paper(OSDI'06)  
 
+### lab2
+-	2A TestInitialElection,TestReElection2A pass; TestManyElections2A 90% pass (具体对heartbeat、electionTimeout调参，这里我总是不能调到100%pass，可能代码不够优化)  
+
 ## 学习小组 Group
 
 mit6.824自学互助 QQ群：258537180(群已满)
