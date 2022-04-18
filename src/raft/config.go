@@ -217,6 +217,7 @@ func (cfg *config) applierSnap(i int, applyCh chan ApplyMsg) {
 				e := labgob.NewEncoder(w)
 				v := m.Command
 				e.Encode(v)
+				// DPrintf("server %v, commandIndex: %v.", i, m.CommandIndex)
 				cfg.rafts[i].Snapshot(m.CommandIndex, w.Bytes())
 			}
 		} else {
@@ -276,7 +277,7 @@ func (cfg *config) start1(i int, applier func(int, chan ApplyMsg)) {
 	cfg.rafts[i] = rf
 	cfg.mu.Unlock()
 
-	go applier(i, applyCh)
+	go applier(i, applyCh) // 为每个节点异步调用applierSnap，即满10个command打一次快照 Snapshot
 
 	svc := labrpc.MakeService(rf)
 	srv := labrpc.MakeServer()
@@ -515,6 +516,7 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 			if rf != nil {
 				index1, _, ok := rf.Start(cmd)
 				if ok {
+					// fmt.Println("one, ok = true")
 					index = index1
 					break
 				}
@@ -529,8 +531,10 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 				nd, cmd1 := cfg.nCommitted(index)
 				if nd > 0 && nd >= expectedServers {
 					// committed
+					// fmt.Println("in")
 					if cmd1 == cmd {
 						// and it was the command we submitted.
+						// fmt.Println("ret")
 						return index
 					}
 				}

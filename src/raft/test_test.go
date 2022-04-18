@@ -8,7 +8,9 @@ package raft
 // test with the original before submitting.
 //
 
-import "testing"
+import (
+	"testing"
+)
 import "fmt"
 import "time"
 import "math/rand"
@@ -1019,6 +1021,8 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 	cfg.begin(name)
 
 	cfg.one(rand.Int(), servers, true)
+	// idx1 := cfg.one(rand.Int(), servers, true)
+	// fmt.Println("idx1 " + strconv.Itoa(idx1))
 	leader1 := cfg.checkOneLeader()
 
 	for i := 0; i < iters; i++ {
@@ -1028,11 +1032,15 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 			sender = (leader1 + 1) % servers
 			victim = leader1
 		}
+		// fmt.Printf("victim: %d, sender: %d, leader: %d \n", victim, sender, leader1)
 
 		if disconnect {
 			cfg.disconnect(victim)
 			cfg.one(rand.Int(), servers-1, true)
+			// idx2 := cfg.one(rand.Int(), servers-1, true)
+			// fmt.Println("idx2 " + strconv.Itoa(idx2))
 		}
+		// fmt.Println("1")
 		if crash {
 			cfg.crash1(victim)
 			cfg.one(rand.Int(), servers-1, true)
@@ -1043,23 +1051,30 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 		}
 		// let applier threads catch up with the Start()'s
 		cfg.one(rand.Int(), servers-1, true)
+		// idx3 := cfg.one(rand.Int(), servers-1, true)
+		// fmt.Println("idx3 " + strconv.Itoa(idx3))
 
+		// fmt.Println("2")
 		if cfg.LogSize() >= MAXLOGSIZE {
 			cfg.t.Fatalf("Log size too large")
 		}
 		if disconnect {
 			// reconnect a follower, who maybe behind and
-			// needs to rceive a snapshot to catch up.
+			// needs to receive a snapshot to catch up.
 			cfg.connect(victim)
 			cfg.one(rand.Int(), servers, true)
+			// idx4 := cfg.one(rand.Int(), servers, true)
+			// fmt.Println("idx4 " + strconv.Itoa(idx4))
 			leader1 = cfg.checkOneLeader()
 		}
+		// fmt.Println("3")
 		if crash {
 			cfg.start1(victim, cfg.applierSnap)
 			cfg.connect(victim)
 			cfg.one(rand.Int(), servers, true)
 			leader1 = cfg.checkOneLeader()
 		}
+		// fmt.Println("4")
 	}
 	cfg.end()
 }

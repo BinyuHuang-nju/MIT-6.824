@@ -1,15 +1,17 @@
 package raft
 
+// we should confirm that commitIndex, lastApplied >= lastSnapshotIndex
 func (rf *Raft) advanceCommitIndex() {
 	rf.lock("advanceCommitIndex")
 	defer rf.unlock()
-	if rf.state != STATE_LEADER || rf.commitIndex == len(rf.log)-1 {
+	lastLogIndex, _ := rf.lastLog()
+	if rf.state != STATE_LEADER || rf.commitIndex == lastLogIndex {
 		return
 	}
 	quorum := len(rf.peers)/2 + 1
 	newCommitted := rf.commitIndex
-	for i := len(rf.log)-1; i > rf.commitIndex; i-- {
-		if rf.log[i].Term < rf.currentTerm {
+	for i := lastLogIndex; i > rf.commitIndex; i-- {
+		if rf.log[rf.realIndexByLogIndex(i)].Term < rf.currentTerm {
 			break  // commit: entry.term == currentTerm && quorum of servers save the entry
 		}
 		meetNum := 0
@@ -39,11 +41,18 @@ func (rf *Raft) applyCommittedEntries() {
 	for !rf.killed() {
 		if rf.lastApplied < rf.commitIndex {
 			rf.lastApplied++
+			if rf.lastApplied != rf.log[rf.realIndexByLogIndex(rf.lastApplied)].Index {
+				rf.LOG_ServerDetailedInfo("apply")
+			}
 			msg := ApplyMsg{
 				CommandValid: true,
-				Command:      rf.log[rf.lastApplied].Command,
-				CommandIndex: rf.log[rf.lastApplied].Index,
+				Command:      rf.log[rf.realIndexByLogIndex(rf.lastApplied)].Command,
+				CommandIndex: rf.log[rf.realIndexByLogIndex(rf.lastApplied)].Index,
+
+				SnapshotValid: false,
 			}
+			DPrintf("server %v: Apply command with index %v and term %v.", rf.me,
+				msg.CommandIndex, rf.log[rf.realIndexByLogIndex(rf.lastApplied)].Term)
 			rf.unlock()
 			rf.applyChannel <- msg
 			rf.lock("applyCommittedEntries")

@@ -9,6 +9,7 @@ import (
 
 // Debugging
 const Debug = false
+// const Debug = true
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug {
@@ -18,6 +19,7 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 }
 
 var globalLock = sync.Mutex{}
+const output = false
 
 func LOG_TwoLeadersInOneTerm() {
 	log.Fatal("event theoretically impossible happens: two leaders in a certain term.")
@@ -37,6 +39,9 @@ func LOG_InconsistentLog(me int, entries []LogEntry) {
 }
 
 func (rf* Raft)LOG_ServerDetailedInfo(event string) {
+	if !output {
+		return
+	}
 	globalLock.Lock()
 	log.Println("========== Event "+ strconv.Itoa(rf.me) +", " + strconv.Itoa(rf.eventId) + " START ==========")
 	log.Println("server id: " + strconv.Itoa(rf.me) + ", event: "+ event)
@@ -46,6 +51,7 @@ func (rf* Raft)LOG_ServerDetailedInfo(event string) {
 	case STATE_LEADER:    log.Printf("Leader,    ")
 	}
 	log.Println("currentTerm: " + strconv.Itoa(rf.currentTerm) + ", length of log: " + strconv.Itoa(len(rf.log)))
+	log.Println("snapshotIndex: " + strconv.Itoa(rf.lastSnapshotIndex) + ", snapshotTerm: " + strconv.Itoa(rf.lastSnapshotTerm))
 	if len(rf.log) > 0 {
 		for i := 0; i < len(rf.log); i++ {
 			log.Println("Term: "+strconv.Itoa(rf.log[i].Term) + ", Index: " +strconv.Itoa(rf.log[i].Index))
@@ -64,6 +70,11 @@ func (rf* Raft)LOG_ServerDetailedInfo(event string) {
 }
 
 func (rf* Raft)LOG_ServerConciseInfo(event string) {
+	if !output {
+		return
+	}
+	globalLock.Lock()
+	defer globalLock.Unlock()
 	log.Println("========== Event "+ strconv.Itoa(rf.me) +", " + strconv.Itoa(rf.eventId) + " START ==========")
 	log.Println("server id: " + strconv.Itoa(rf.me) + ", event: "+ event)
 	switch rf.state {
@@ -74,4 +85,34 @@ func (rf* Raft)LOG_ServerConciseInfo(event string) {
 	log.Println("currentTerm: " + strconv.Itoa(rf.currentTerm) + ", length of log: " + strconv.Itoa(len(rf.log)))
 	log.Println("========== Event "+ strconv.Itoa(rf.eventId) + "    END ============")
 	rf.eventId++
+}
+
+func (rf *Raft) LOG_SnapshotAndLog(index int) {
+	if !output {
+		return
+	}
+	globalLock.Lock()
+	defer globalLock.Unlock()
+	fmt.Println("server id: " + strconv.Itoa(rf.me) + ", lastSnapshotIndex: "+ strconv.Itoa(rf.lastSnapshotIndex) +
+		", lastSnapshotTerm: " + strconv.Itoa(rf.lastSnapshotTerm) + ", currentTerm: " + strconv.Itoa(rf.currentTerm))
+	fmt.Println("length of log: " + strconv.Itoa(len(rf.log))  + ", index: " + strconv.Itoa(index))
+}
+
+func (rf *Raft) LOG_SnapshotAndLog1() {
+	if !output {
+		return
+	}
+	globalLock.Lock()
+	defer globalLock.Unlock()
+	lastLogIndex, lastLogTerm := rf.lastLog()
+	fmt.Println("server id: " + strconv.Itoa(rf.me) + ", lastSnapshotIndex: "+ strconv.Itoa(rf.lastSnapshotIndex) +
+		", lastSnapshotTerm: " + strconv.Itoa(rf.lastSnapshotTerm) + ", currentTerm: " + strconv.Itoa(rf.currentTerm))
+	fmt.Println("length of log: " + strconv.Itoa(len(rf.log))  + ", lastLogIndex: " + strconv.Itoa(lastLogIndex) +
+		 ", lastLogTerm: " + strconv.Itoa(lastLogTerm))
+	if rf.state == STATE_LEADER {
+		fmt.Println("as leader, nextIndex and matchIndex for each server: ")
+		for i := 0; i < len(rf.peers); i++ {
+			fmt.Printf("      server %d: %d, %d \n", i, rf.nextIndex[i], rf.matchIndex[i] )
+		}
+	}
 }

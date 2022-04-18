@@ -3,23 +3,23 @@ package raft
 import "fmt"
 
 func (rf *Raft) makeAppendEntriesArgs(target int, isHeartbeat bool) AppendEntriesArgs {
-	rf.lock(fmt.Sprintf("makeAppendEntriesArgs(%d)", target))
-	defer rf.unlock()
+	// rf.lock(fmt.Sprintf("makeAppendEntriesArgs(%d)", target))
+	// defer rf.unlock()
 	//	rf.LOG_ServerDetailedInfo("makeAppendEntriesArgs")
 	entries := make([]LogEntry, 0)
 	if !isHeartbeat {
-		length := Min(len(rf.log)-rf.nextIndex[target], DEFAULT_AELENGTH)
+		length := Min(rf.logLen()-rf.nextIndex[target], DEFAULT_AELENGTH)
 		if length > 0 {
 			startIndex := rf.nextIndex[target]
 			for i := 0; i < length; i++ {
-				entries = append(entries, rf.log[startIndex+i])
+				entries = append(entries, rf.log[rf.realIndexByLogIndex(startIndex+i)])
 			}
 		}
 	}
 	prevLogIndex := rf.nextIndex[target]-1
-	prevLogTerm := -1
-	if prevLogIndex >= 0 {
-		prevLogTerm = rf.log[prevLogIndex].Term
+	prevLogTerm := rf.lastSnapshotTerm
+	if prevLogIndex > rf.lastSnapshotIndex {
+		prevLogTerm = rf.log[rf.realIndexByLogIndex(prevLogIndex)].Term
 	}
 	args := AppendEntriesArgs{
 		Term:         rf.currentTerm,
@@ -34,37 +34,45 @@ func (rf *Raft) makeAppendEntriesArgs(target int, isHeartbeat bool) AppendEntrie
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.lock("AppendEntries")
+	defer rf.unlock()
 	if args.Term < rf.currentTerm {
 		reply.Term = rf.currentTerm
 		reply.Success = false
-		rf.unlock()
 		return
 	}
 	reply.Term = args.Term
 	rf.resetElectionTime()
 	if args.Term == rf.currentTerm && rf.state == STATE_LEADER {
-		rf.unlock()
 		LOG_TwoLeadersInOneTerm()
 	}
 	if args.Term > rf.currentTerm || (args.Term == rf.currentTerm && rf.state == STATE_CANDIDATE) {
 		rf.becomeFollower(args.Term)
 	}
+	if args.PrevLogIndex < rf.lastSnapshotIndex {
+		DPrintf("server %v receives unexpected AERequest since prevLogIndex %v < lastSnapshot %v",
+			rf.me, args.PrevLogIndex, rf.lastSnapshotIndex)
+		reply.Success = false
+		reply.ConflictIndex = rf.lastSnapshotIndex + 1
+		reply.ConflictTerm = -1
+		return
+	}
 	logOk := false // true, if entry with (prevLogTerm, prevLogIndex) exists in log
-	if args.PrevLogIndex == -1 ||
-		(args.PrevLogIndex >= 0 && args.PrevLogIndex < len(rf.log) && args.PrevLogTerm == rf.log[args.PrevLogIndex].Term) {
+	if args.PrevLogIndex >= rf.lastSnapshotIndex && args.PrevLogIndex < rf.logLen() &&
+			args.PrevLogTerm == rf.termForIndex(args.PrevLogIndex) {
 		logOk = true
 	}
 	if !logOk {    // logOk == false, so truncate log and return false
 		reply.Success = false
-		reply.ConflictIndex = -1
-		reply.ConflictTerm = -1
-		if args.PrevLogIndex >= 0 {
-			if args.PrevLogIndex >= len(rf.log) {
-				reply.ConflictIndex = len(rf.log)
+		reply.ConflictIndex = rf.lastSnapshotIndex
+		reply.ConflictTerm = rf.lastSnapshotTerm
+		if args.PrevLogIndex >= rf.lastSnapshotIndex {
+			if args.PrevLogIndex >= rf.logLen() {
+				reply.ConflictIndex = rf.logLen()
 				reply.ConflictTerm = -1
 			} else {
-				standardTerm := rf.log[args.PrevLogIndex].Term
-				rf.log = rf.log[:args.PrevLogIndex] // truncate inconsistent entries
+				standardTerm := rf.termForIndex(args.PrevLogIndex)
+				// rf.log = rf.log[:args.PrevLogIndex] // truncate inconsistent entries
+				rf.log = rf.subLog(0, rf.realIndexByLogIndex(args.PrevLogIndex))
 
 				reply.ConflictIndex = rf.firstIndexForTerm(standardTerm, args.PrevLogIndex)
 				reply.ConflictTerm = standardTerm
@@ -75,18 +83,23 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		consistent := args.PrevLogIndex + len(args.Entries)
 		reply.MatchIndex = consistent
 		for i, j := args.PrevLogIndex+1, 0; j < len(args.Entries); i, j = i+1, j+1 {
-			if i < len(rf.log) {
+			if args.Entries[j].Index != i {
+				fmt.Println(" reach condition: args.Entries[j].Index != i")
+			}
+			if i < rf.logLen() {
 				// mat exist, e.g. leader: 1 1 2 3 3, follower: 1 1 2 3 3 3 3
-				if rf.log[i].Term != args.Entries[j].Term {
-					rf.log[i] = args.Entries[j]
+				if rf.termForIndex(i) != args.Entries[j].Term {
+					rf.log[rf.realIndexByLogIndex(i)] = args.Entries[j]
 				}
 			} else {
 				rf.log = append(rf.log, args.Entries[j])
 			}
 		}
 		// truncate subsequent entries if necessary
-		if consistent + 1 < len(rf.log) && consistent >= 0 && rf.log[consistent].Term > rf.log[consistent+1].Term {
-			rf.log = rf.log[:(consistent+1)]
+		if consistent + 1 < rf.logLen() && consistent >= rf.lastSnapshotIndex &&
+			rf.termForIndex(consistent) > rf.termForIndex(consistent+1) {
+			// rf.log = rf.log[:(consistent+1)]
+			rf.log = rf.subLog(0, rf.realIndexByLogIndex(consistent+1))
 		}
 
 		commit := Min(args.LeaderCommit, consistent) // since now, consistent < len(rf.log)
@@ -95,7 +108,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.callApply() // callApply of follower
 	}
 	rf.persist()
-	rf.unlock()
 
 	// Everytime server receives AERequest and returns true, check if it need apply committed entries.
 	// go rf.applyCommittedEntries()
@@ -113,8 +125,19 @@ func (rf *Raft) broadcastAppendEntries() {
 		if i == rf.me {
 			continue
 		}
-		args := rf.makeAppendEntriesArgs(i, false)
-		go rf.sendAndRcvAppendEntries(i, &args)
+		rf.lock("checkSendType")
+		prevLogIndex := rf.nextIndex[i] - 1
+		if prevLogIndex < rf.lastSnapshotIndex {
+			// only snapshot can make this server catch up
+			args := rf.makeInstallSnapshotArgs()
+			rf.unlock()
+			go rf.sendAndRcvInstallSnapshot(i, &args)
+		} else {
+			// just sending entries can make it catch up
+			args := rf.makeAppendEntriesArgs(i, false)
+			rf.unlock()
+			go rf.sendAndRcvAppendEntries(i, &args)
+		}
 	}
 }
 
@@ -148,7 +171,7 @@ func (rf *Raft) sendAndRcvAppendEntries(target int, args *AppendEntriesArgs) {
 				// ok, drop
 			} else {
 				lastIndex := rf.lastIndexForTerm(reply.ConflictTerm)
-				if lastIndex != -1 {
+				if lastIndex >= rf.lastSnapshotIndex {
 					rf.nextIndex[target] = Min(rf.nextIndex[target], lastIndex + 1)
 				} else {
 					rf.nextIndex[target] = Min(rf.nextIndex[target], reply.ConflictIndex)
