@@ -1,15 +1,26 @@
 package kvraft
 
-import "6.824/labrpc"
+import (
+	"6.824/labrpc"
+	"time"
+)
 import "crypto/rand"
 import "math/big"
 
+const (
+	WAITFOR_ELECTION_INTERVAL = time.Duration(10 * time.Millisecond)
+)
 
 type Clerk struct {
-	servers []*labrpc.ClientEnd
+	servers   []*labrpc.ClientEnd
 	// You will have to modify this struct.
+	ns        int   // num of servers
+	leaderId  int
+	clientId  int64 // [ clientId, commandId ] forms a unique identifier of request
+	commandId int   // increases monotonically
 }
 
+// to generate clientId
 func nrand() int64 {
 	max := big.NewInt(int64(1) << 62)
 	bigx, _ := rand.Int(rand.Reader, max)
@@ -21,7 +32,20 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
 	// You'll have to add code here.
+	ck.ns = len(servers)
+	ck.leaderId = 0
+	ck.clientId = nrand()
+	ck.commandId = 0
 	return ck
+}
+
+func (ck *Clerk) sendGetRequest(server int, args *GetArgs, reply *GetReply) bool {
+	ok := ck.servers[server].Call("KVServer.Get", &args, &reply)
+	return ok
+}
+func (ck *Clerk) sendPutAppendRequest(server int, args *PutAppendArgs, reply *PutAppendReply) bool {
+	ok := ck.servers[server].Call("KVServer.PutAppend", &args, &reply)
+	return ok
 }
 
 //

@@ -100,7 +100,7 @@ func (rf *Raft) sendAndRcvInstallSnapshot(target int, args *InstallSnapshotArgs)
 		}
 		if rf.nextIndex[target] > args.LastIncludedIndex {
 			// ok, drop
-			// can catch up by new Snapshot or AppendEntries
+			// can catch up by new InstallSnapshot or AppendEntries
 		} else {
 			rf.nextIndex[target] = args.LastIncludedIndex + 1
 			rf.matchIndex[target] = args.LastIncludedIndex

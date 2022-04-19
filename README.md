@@ -19,7 +19,10 @@ MIT 6.824 课程的学习资料 代码更新为2021版
 - [ ]   2C pass (except TestFigure8Unreliable2C)  
 	- test: sh ./test_persist.sh  
 - [x]   2D pass
-	- test: sh ./test_snapshot.sh
+	- test: sh ./test_snapshot.sh  
+
+### lab3
+-	OngaroPhD Paper(Sec.6) 
 
 ## 课程安排 Schedule
 
