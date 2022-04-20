@@ -4,6 +4,7 @@ import (
 	"6.824/labgob"
 	"6.824/labrpc"
 	"6.824/raft"
+	"fmt"
 	"sync"
 	"sync/atomic"
 )
@@ -13,6 +14,21 @@ type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	Opr       string
+	Key       string
+	Value     string
+	ClientId  int64
+	CommandId int
+}
+
+type NotifyMsg struct {
+	Error Err
+	Value string
+}
+
+type ApplyRecord struct {
+	CommandId int
+	ReplyInfo PutAppendReply
 }
 
 type KVServer struct {
@@ -25,8 +41,31 @@ type KVServer struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
+	lastApplied    int
+	kvStateMachine *KVStateMachine     // key -> value
+
+	notifyChs map[int]chan NotifyMsg   // commandIndex -> channel
+	lastOpr   map[int64]ApplyRecord    // clientId -> latest commandId + command info
 }
 
+type KVStateMachine struct {
+	data map[string]string
+}
+func MakeKV() *KVStateMachine {
+	kv := &KVStateMachine{
+		data: make(map[string]string),
+	}
+	return kv
+}
+func (kv *KVStateMachine) Get(key string) (string, Err) {
+
+}
+func (kv *KVStateMachine) Put(key string, value string) Err {
+
+}
+func (kv *KVStateMachine) Append(key string, value string) Err {
+
+}
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
@@ -56,6 +95,11 @@ func (kv *KVServer) Kill() {
 func (kv *KVServer) killed() bool {
 	z := atomic.LoadInt32(&kv.dead)
 	return z == 1
+}
+
+func printType(i interface{}) {
+	t := fmt.Sprintf("%T", i)
+	fmt.Println(t)
 }
 
 //

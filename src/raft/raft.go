@@ -94,6 +94,7 @@ type Raft struct {
 	// Volatile state on all servers
 	commitIndex  int                 // initialized to -1, increases monotonically
 	lastApplied  int                 // initialized to -1, increases monotonically
+	leaderId     int                 // optimization for lab3, to tell the client the current leader
 	// Volatile state on leaders
 	nextIndex    []int               // index of the next log entry to send to one server
 	matchIndex   []int               // index of highest log entry known to be replicated on server
@@ -167,6 +168,18 @@ func (rf *Raft) GetState() (int, bool) {
 	term := rf.currentTerm
 	isleader := rf.state == STATE_LEADER
 	return term, isleader
+}
+
+func (rf *Raft) GetStateAndLeader() (int, bool, int) {
+	rf.lock("GetStateAndLeader")
+	defer rf.unlock()
+	term := rf.currentTerm
+	isLeader := rf.state == STATE_LEADER
+	leader := -1
+	if rf.state == STATE_FOLLOWER {
+		leader = rf.leaderId
+	}
+	return term, isLeader, leader
 }
 
 //
@@ -467,6 +480,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.log = []LogEntry{}
 	rf.lastSnapshotIndex = -1
 	rf.lastSnapshotTerm = -1
+	rf.leaderId = -1
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())

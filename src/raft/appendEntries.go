@@ -48,6 +48,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if args.Term > rf.currentTerm || (args.Term == rf.currentTerm && rf.state == STATE_CANDIDATE) {
 		rf.becomeFollower(args.Term)
 	}
+	rf.leaderId = args.LeaderId // for lab3 to make client route requests to leader faster
 	if args.PrevLogIndex < rf.lastSnapshotIndex {
 		DPrintf("server %v receives unexpected AERequest since prevLogIndex %v < lastSnapshot %v",
 			rf.me, args.PrevLogIndex, rf.lastSnapshotIndex)

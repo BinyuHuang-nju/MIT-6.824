@@ -22,24 +22,30 @@ type Err string
 
 // Put or Append
 type PutAppendArgs struct {
-	Key   string
-	Value string
-	Op    string // "Put" or "Append"
+	Key       string
+	Value     string
+	Op        string // "Put" or "Append"
 	// You'll have to add definitions here.
+	clientId  int64
+	commandId int
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
 }
 
 type PutAppendReply struct {
-	Err Err
+	Err        Err
+	leaderHint int // address of recent leader, take effect when Err not OK.
 }
 
 type GetArgs struct {
-	Key string
+	Key       string
 	// You'll have to add definitions here.
+	clientId  int64
+	commandId int
 }
 
 type GetReply struct {
-	Err   Err
-	Value string
+	Err        Err
+	Value      string
+	leaderHint int
 }

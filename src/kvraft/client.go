@@ -2,6 +2,7 @@ package kvraft
 
 import (
 	"6.824/labrpc"
+	"log"
 	"time"
 )
 import "crypto/rand"
@@ -28,6 +29,7 @@ func nrand() int64 {
 	return x
 }
 
+// no need to create lock, since client make one call at a time.
 func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
@@ -48,6 +50,39 @@ func (ck *Clerk) sendPutAppendRequest(server int, args *PutAppendArgs, reply *Pu
 	return ok
 }
 
+func (ck *Clerk) makeGetArgs(key string) GetArgs {
+	args := GetArgs{
+		Key:       key,
+		clientId:  ck.clientId,
+		commandId: ck.commandId,
+	}
+	ck.commandId++
+	return args
+}
+
+func (ck *Clerk) makePutAppendArgs(key string, value string, op string) PutAppendArgs {
+	if op != "Put" && op != "Append" {
+		log.Fatalf("op in PutAppend is %v", op)
+	}
+	args := PutAppendArgs{
+		Key:       key,
+		Value:     value,
+		Op:        op,
+		clientId:  ck.clientId,
+		commandId: ck.commandId,
+	}
+	ck.commandId++
+	return args
+}
+
+func (ck *Clerk) convertSessionServer(id int) {
+	if id < 0 || id >= ck.ns {
+		ck.leaderId = (ck.leaderId + 1) % ck.ns
+	} else {
+		ck.leaderId = id
+	}
+}
+
 //
 // fetch the current value for a key.
 // returns "" if the key does not exist.
@@ -63,6 +98,42 @@ func (ck *Clerk) sendPutAppendRequest(server int, args *PutAppendArgs, reply *Pu
 func (ck *Clerk) Get(key string) string {
 
 	// You will have to modify this function.
+	DPrintf("client [%v]: send request Get with key and commandId (%v, %d) to server %d",
+		ck.clientId, key, ck.commandId, ck.leaderId)
+	args := ck.makeGetArgs(key)
+	for {
+		reply := GetReply{}
+		ok := ck.sendGetRequest(ck.leaderId, &args, &reply)
+		if !ok {
+			ck.convertSessionServer(-1)
+			DPrintf("client [%v]: request Get with key and commandId (%v, %d) lose connection, convert to server %d",
+				ck.clientId, key, ck.commandId, ck.leaderId)
+			// time.Sleep(WAITFOR_ELECTION_INTERVAL)
+		} else {
+			switch reply.Err {
+			case OK:
+				DPrintf("client [%v]: request Get with key and commandId (%v, %d) end, with Value {%v}",
+					ck.clientId, key, ck.commandId, reply.Value)
+				return reply.Value
+			case ErrNoKey:
+				DPrintf("client [%v]: request Get with key and commandId (%v, %d) end, but no key",
+					ck.clientId, key, ck.commandId)
+				return ""
+			case ErrTimeout:
+				ck.convertSessionServer(-1)
+				DPrintf("client [%v]: request Get with key and commandId (%v, %d) time out, convert to server %d",
+					ck.clientId, key, ck.commandId, ck.leaderId)
+				// time.Sleep(WAITFOR_ELECTION_INTERVAL)
+			case ErrWrongLeader:
+				ck.convertSessionServer(reply.leaderHint)
+				DPrintf("client [%v]: request Get with key and commandId (%v, %d) wrong leader, convert to server %d",
+					ck.clientId, key, ck.commandId, ck.leaderId)
+				time.Sleep(WAITFOR_ELECTION_INTERVAL)
+			default:
+				log.Fatal("Err type no seen.")
+			}
+		}
+	}
 	return ""
 }
 
@@ -78,6 +149,38 @@ func (ck *Clerk) Get(key string) string {
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
+	DPrintf("client [%v]: send request %v with key,value (%v, %v) and commandId %d to server %d",
+		ck.clientId, op, key, value, ck.commandId, ck.leaderId)
+	args := ck.makePutAppendArgs(key, value, op)
+	for {
+		reply := PutAppendReply{}
+		ok := ck.sendPutAppendRequest(ck.leaderId, &args, &reply)
+		if !ok {
+			ck.convertSessionServer(-1)
+			DPrintf("client [%v]: request %v with key,value (%v, %v) and commandId %d lose connection, convert to server %d",
+				ck.clientId, op, key, value, ck.commandId, ck.leaderId)
+		} else {
+			switch reply.Err {
+			case OK:
+				DPrintf("client [%v]: request %v with key,value (%v, %v) and commandId %d end",
+					ck.clientId, op, key, value, ck.commandId)
+				return
+			case ErrNoKey:
+				log.Fatalf(" request %v but reply ErrNoKey", op)
+			case ErrTimeout:
+				ck.convertSessionServer(-1)
+				DPrintf("client [%v]: request %v with key,value (%v, %v) and commandId %d time out, convert to server %d",
+					ck.clientId, op, key, value, ck.commandId, ck.leaderId)
+			case ErrWrongLeader:
+				ck.convertSessionServer(reply.leaderHint)
+				DPrintf("client [%v]: request %v with key,value (%v, %v) and commandId %d wrong leader, convert to server %d",
+					ck.clientId, op, key, value, ck.commandId, ck.leaderId)
+				time.Sleep(WAITFOR_ELECTION_INTERVAL)
+			default:
+				log.Fatal("Err type no seen.")
+			}
+		}
+	}
 }
 
 func (ck *Clerk) Put(key string, value string) {
