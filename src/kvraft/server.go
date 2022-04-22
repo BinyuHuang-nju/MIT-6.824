@@ -4,11 +4,20 @@ import (
 	"6.824/labgob"
 	"6.824/labrpc"
 	"6.824/raft"
+	"bytes"
 	"fmt"
+	"log"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
+const (
+	OpGet    = "Get"
+	OpPut    = "Put"
+	OpAppend = "Append"
+	REQUEST_TIMEOUT = time.Duration(time.Millisecond * 500)
+)
 
 type Op struct {
 	// Your definitions here.
@@ -28,7 +37,7 @@ type NotifyMsg struct {
 
 type ApplyRecord struct {
 	CommandId int
-	ReplyInfo PutAppendReply
+	Error     Err
 }
 
 type KVServer struct {
@@ -42,38 +51,213 @@ type KVServer struct {
 
 	// Your definitions here.
 	lastApplied    int
+	maxSeenTerm    int
 	kvStateMachine *KVStateMachine     // key -> value
 
 	notifyChs map[int]chan NotifyMsg   // commandIndex -> channel
-	lastOpr   map[int64]ApplyRecord    // clientId -> latest commandId + command info
+	lastOpr   map[int64]ApplyRecord    // clientId -> [latest commandId + command info]
 }
 
 type KVStateMachine struct {
 	data map[string]string
 }
-func MakeKV() *KVStateMachine {
-	kv := &KVStateMachine{
+
+func MakeSM() *KVStateMachine {
+	sm := &KVStateMachine{
 		data: make(map[string]string),
 	}
-	return kv
+	return sm
 }
-func (kv *KVStateMachine) Get(key string) (string, Err) {
 
+func (sm *KVStateMachine) ReadSnapshot(data []byte) {
+	if data == nil || len(data) < 1 {
+		return
+	}
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var st map[string]string
+	if d.Decode(&st) != nil {
+		log.Fatal("read snapshot failed.")
+	} else {
+		DPrintf("state machine read snapshot succeed.")
+		sm.data = st
+	}
 }
-func (kv *KVStateMachine) Put(key string, value string) Err {
 
+func (sm *KVStateMachine) Get(key string) (string, Err) {
+	if val, ok := sm.data[key]; ok {
+		return val, OK
+	}
+	return "", ErrNoKey
 }
-func (kv *KVStateMachine) Append(key string, value string) Err {
 
+func (sm *KVStateMachine) Put(key string, value string) Err {
+	sm.data[key] = value
+	return OK
+}
+func (sm *KVStateMachine) Append(key string, value string) Err {
+	sm.data[key] += value
+	return OK
+}
+
+func (kv *KVServer) applyEntryToStateMachine(op Op) (Err, string) {
+	val := ""
+	var err Err
+	switch op.Opr {
+	case OpGet:
+		val, err = kv.kvStateMachine.Get(op.Key)
+	case OpPut:
+		err = kv.kvStateMachine.Put(op.Key, op.Value)
+	case OpAppend:
+		err = kv.kvStateMachine.Append(op.Key, op.Value)
+	default:
+		log.Fatal("unknown op type when applying entry to state machine")
+	}
+	return err, val
+}
+
+func (kv *KVServer) readLastOpr(data []byte) {
+	if data == nil || len(data) < 1 {
+		return
+	}
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var st map[int64]ApplyRecord
+	if d.Decode(&st) != nil {
+		log.Fatal("read last operations failed.")
+	} else {
+		DPrintf("read last operation succeed.")
+		kv.lastOpr = st
+	}
+}
+
+// should be called when snapshot updated,
+// namely when calling Snapshot or calling CondInstallSnapshot return true.
+func (kv *KVServer) persistLastOpr() {
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(kv.lastOpr)
+	data := w.Bytes()
+	kv.rf.GetPersister().SaveLastoprs(data)
+}
+
+func (kv *KVServer) isDuplicated(op string, clientId int64, commandId int) bool {
+	if op == OpGet {
+		return false
+	}
+	rec, ok := kv.lastOpr[clientId]
+	if !ok || commandId > rec.CommandId {
+		return false
+	}
+	return true
+}
+
+func (kv *KVServer) makeOp(args interface{}) Op {
+	op := Op{}
+	switch args.(type) {
+	case *GetArgs:
+		m := args.(*GetArgs)
+		op.Opr = OpGet
+		op.Key = m.Key
+		op.Value = ""
+		op.ClientId = m.ClientId
+		op.CommandId = m.CommandId
+	case *PutAppendArgs:
+		m := args.(*PutAppendArgs)
+		op.Opr = m.Op
+		op.Key = m.Key
+		op.Value = m.Value
+		op.ClientId = m.ClientId
+		op.CommandId = m.CommandId
+	default:
+		log.Fatalf("unknown args type %T in makeOp.", args)
+	}
+	return op
+}
+
+func (kv *KVServer) generateNotifyCh(index int) chan NotifyMsg {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	ch, ok := kv.notifyChs[index]
+	if !ok {
+		ch = make(chan NotifyMsg, 1)
+		kv.notifyChs[index] = ch
+	}
+	return ch
+}
+
+func (kv *KVServer) getNotifyCh(index int) (chan NotifyMsg, bool) {
+	// achieve lock in applier
+	ch, ok := kv.notifyChs[index]
+	if !ok {
+		DPrintf("applier wants to get NotifyCh[%d] but it not exists", index)
+	}
+	return ch, ok
+}
+
+func (kv *KVServer) deleteOutdatedNotifyCh(index int) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	for k, _ := range kv.notifyChs {
+		if k <= index {
+			delete(kv.notifyChs, k)
+		}
+	}
+	delete(kv.notifyChs, index)
+}
+
+func (kv *KVServer) processNotifyCh(op Op) NotifyMsg {
+	index, _, _ := kv.rf.Start(op)
+	ch := kv.generateNotifyCh(index)
+	t := time.NewTimer(REQUEST_TIMEOUT)
+	not := NotifyMsg{}
+	select {
+	case not = <-ch :
+		break
+	case <-t.C:
+		not.Error, not.Value = ErrTimeout, ""
+		break
+	}
+	go kv.deleteOutdatedNotifyCh(index)
+	return not
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
-
+	_, isLeader, hint := kv.rf.GetStateAndLeader()
+	DPrintf("server [%d]: isLeader %v, leaderHint %d", kv.me, isLeader, hint)
+	if !isLeader {
+		reply.Err = ErrWrongLeader
+		reply.LeaderHint = hint
+		return
+	}
+	op := kv.makeOp(args)
+	not := kv.processNotifyCh(op)
+	reply.Err, reply.Value = not.Error, not.Value
+	reply.LeaderHint = -1
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
+	DPrintf("server [%d]: RPC PutAppend from client %v and commandId %d", kv.me, args.ClientId, args.CommandId)
 	// Your code here.
+	kv.mu.Lock()
+	if kv.isDuplicated(args.Op, args.ClientId, args.CommandId) {
+		reply.Err = kv.lastOpr[args.ClientId].Error
+		reply.LeaderHint = -1
+		kv.mu.Unlock()
+		return
+	}
+	kv.mu.Unlock()
+	_, isLeader, hint := kv.rf.GetStateAndLeader()
+	DPrintf("server [%d]: isLeader %v, leaderHint %d", kv.me, isLeader, hint)
+	if !isLeader {
+		reply.Err = ErrWrongLeader
+		reply.LeaderHint = hint
+		return
+	}
+	op := kv.makeOp(args)
+	not := kv.processNotifyCh(op)
+	reply.Err, reply.LeaderHint = not.Error, -1
 }
 
 //
@@ -95,6 +279,74 @@ func (kv *KVServer) Kill() {
 func (kv *KVServer) killed() bool {
 	z := atomic.LoadInt32(&kv.dead)
 	return z == 1
+}
+
+func (kv *KVServer) applier() {
+	for !kv.killed() {
+		select {
+		case msg := <- kv.applyCh :
+			if msg.CommandValid {
+				kv.mu.Lock()
+				if msg.CommandIndex <= kv.lastApplied {
+					DPrintf("msg.CommandIndex %d <= kv.lastApplied %d", msg.CommandIndex, kv.lastApplied)
+					kv.mu.Unlock()
+					continue
+				}
+				kv.lastApplied = msg.CommandIndex
+				switch msg.Command.(type) {
+				case int:
+					// since we add a no-op command when a peer becomes leader,
+					// we should not consider this command
+					term, _ := kv.rf.GetState()
+					if kv.maxSeenTerm >= term {
+						DPrintf("kv.maxSeenTerm >= rf.currentTerm")
+					}
+					kv.maxSeenTerm = term
+					kv.mu.Unlock()
+					continue
+				case Op:
+					op := msg.Command.(Op)
+					not := NotifyMsg{}
+					if kv.isDuplicated(op.Opr, op.ClientId, op.CommandId) {
+						// request out-of-date, just reply
+						DPrintf("receive duplicated operation from applyCh with clientId %v and commandId %d, but last id is %v",
+							op.ClientId, op.CommandId, kv.lastOpr[op.ClientId])
+						not.Error = kv.lastOpr[op.ClientId].Error
+					} else {
+						// update state machine or get value from it.
+						err, val := kv.applyEntryToStateMachine(op)
+						not.Error, not.Value = err, val
+						// when op is Put or Append, we need to update lastOperation ever seen of this clientId.
+						if op.Opr != OpGet {
+							ar := ApplyRecord{
+								CommandId: op.CommandId,
+								Error:     err,
+							}
+							kv.lastOpr[op.ClientId] = ar
+						}
+					}
+					// is case that a peer has changed its state,
+					// the request of CommandIndex in Start it refers may convert to another request.
+					if currentTerm, isLeader := kv.rf.GetState(); isLeader && currentTerm == msg.CommandTerm {
+						ch, ok := kv.getNotifyCh(msg.CommandIndex)
+						if ok {
+							ch <- not
+						}
+					}
+				default:
+					log.Fatalf("unknown command type %T", msg.Command)
+				}
+				// check if service needs to take snapshot
+				// TODO
+				kv.mu.Unlock()
+			} else if msg.SnapshotValid {
+
+			} else {
+				log.Fatal("unknown ApplyMsg type.")
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func printType(i interface{}) {
@@ -129,8 +381,21 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
+	kv.mu = sync.Mutex{}
+	kv.dead = 0
+	kv.kvStateMachine = MakeSM()
+	// kv.lastApplied = -1
+	// kv.maxSeenTerm = -1
+	kv.notifyChs = make(map[int]chan NotifyMsg)
+	kv.lastOpr = make(map[int64]ApplyRecord)
+
+	kv.lastApplied = kv.rf.GetSnapshotIndex()
+	kv.maxSeenTerm = kv.rf.GetSnapshotTerm()
+	kv.kvStateMachine.ReadSnapshot(kv.rf.GetPersister().ReadSnapshot())
+	kv.readLastOpr(kv.rf.GetPersister().ReadLastoprs())
 
 	// You may need initialization code here.
+	go kv.applier()
 
 	return kv
 }

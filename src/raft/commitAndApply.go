@@ -48,6 +48,7 @@ func (rf *Raft) applyCommittedEntries() {
 				CommandValid: true,
 				Command:      rf.log[rf.realIndexByLogIndex(rf.lastApplied)].Command,
 				CommandIndex: rf.log[rf.realIndexByLogIndex(rf.lastApplied)].Index,
+				CommandTerm:  rf.currentTerm,
 
 				SnapshotValid: false,
 			}

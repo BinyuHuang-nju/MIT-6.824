@@ -16,8 +16,9 @@ MIT 6.824 课程的学习资料 代码更新为2021版
 	- test: sh ./test_election.sh  
 - [x]	2B pass
 	- test: sh ./test_replication.sh  
-- [ ]   2C pass (except TestFigure8Unreliable2C)  
+- [x]   2C pass  
 	- test: sh ./test_persist.sh  
+	- [ ] (TestFigure8Unreliable2C often fails) 
 - [x]   2D pass
 	- test: sh ./test_snapshot.sh  
 

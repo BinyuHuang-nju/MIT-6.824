@@ -15,6 +15,7 @@ type Persister struct {
 	mu        sync.Mutex
 	raftstate []byte
 	snapshot  []byte
+	lastOprs  []byte
 }
 
 func MakePersister() *Persister {
@@ -33,6 +34,7 @@ func (ps *Persister) Copy() *Persister {
 	np := MakePersister()
 	np.raftstate = ps.raftstate
 	np.snapshot = ps.snapshot
+	np.lastOprs = ps.lastOprs
 	return np
 }
 
@@ -80,4 +82,17 @@ func (ps *Persister) SnapshotSize() int {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 	return len(ps.snapshot)
+}
+
+// add data lastOprs for lab3
+func (ps *Persister) SaveLastoprs(lastOprs []byte) {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	ps.lastOprs = clone(lastOprs)
+}
+
+func (ps *Persister) ReadLastoprs() []byte {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	return clone(ps.lastOprs)
 }

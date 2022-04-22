@@ -44,6 +44,7 @@ type ApplyMsg struct {
 	CommandValid bool
 	Command      interface{}
 	CommandIndex int
+	CommandTerm  int
 
 	// For 2D:
 	SnapshotValid bool
@@ -151,7 +152,7 @@ func (rf *Raft) becomeLeader() {
 		rf.matchIndex[i] = -1
 	}
 	// append a blank command to advance commit
-	rf.appendNewEntry(0) // initially set 'nil', and several tests do not allow value not int.
+	rf.appendNewEntry(0) // initially set 'nil', and lab2 several tests do not allow value not int.
 	// rf.unlock()
 
 	// broadcast heartbeat
@@ -180,6 +181,18 @@ func (rf *Raft) GetStateAndLeader() (int, bool, int) {
 		leader = rf.leaderId
 	}
 	return term, isLeader, leader
+}
+
+func (rf *Raft) GetPersister() *Persister {
+	return rf.persister
+}
+
+func (rf *Raft) GetSnapshotIndex() int {
+	return rf.lastSnapshotIndex
+}
+
+func (rf *Raft) GetSnapshotTerm() int {
+	return rf.lastSnapshotTerm
 }
 
 //
@@ -527,6 +540,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			rf.lock("log")
 
 			rf.LOG_SnapshotAndLog1()
+			// fmt.Printf("[%d]: state %d,leaderId %d \n", rf.me, rf.state, rf.leaderId)
 
 			rf.unlock()
 			time.Sleep(time.Second)
