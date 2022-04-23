@@ -23,7 +23,14 @@ MIT 6.824 课程的学习资料 代码更新为2021版
 	- test: sh ./test_snapshot.sh  
 
 ### lab3
--	OngaroPhD Paper(Sec.6) 
+-	OngaroPhD Paper(Sec.6)  
+- [x]	3A pass
+	- test: sh ./test_kv3A.sh
+	- [ ] (TestSpeed3A fail, operations completed too slowly)  
+- [ ]   3B  
+- 目前看系统性能还存在缺陷，可提升角度:
+	- client通过更少尝试连接次数与最新leader连接  
+	- 读优化，对Get采用ReadIndex或LeaseRead方式减轻log与广播负担
 
 ## 课程安排 Schedule
 

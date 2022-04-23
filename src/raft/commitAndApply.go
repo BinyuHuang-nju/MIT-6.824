@@ -41,19 +41,20 @@ func (rf *Raft) applyCommittedEntries() {
 	for !rf.killed() {
 		if rf.lastApplied < rf.commitIndex {
 			rf.lastApplied++
-			if rf.lastApplied != rf.log[rf.realIndexByLogIndex(rf.lastApplied)].Index {
+			realIndex := rf.realIndexByLogIndex(rf.lastApplied)
+			if rf.lastApplied != rf.log[realIndex].Index {
 				rf.LOG_ServerDetailedInfo("apply")
 			}
 			msg := ApplyMsg{
 				CommandValid: true,
-				Command:      rf.log[rf.realIndexByLogIndex(rf.lastApplied)].Command,
-				CommandIndex: rf.log[rf.realIndexByLogIndex(rf.lastApplied)].Index,
-				CommandTerm:  rf.currentTerm,
+				Command:      rf.log[realIndex].Command,
+				CommandIndex: rf.log[realIndex].Index,
+				CommandTerm:  rf.log[realIndex].Term, // not rf.currentTerm
 
 				SnapshotValid: false,
 			}
 			DPrintf("server %v: Apply command with index %v and term %v.", rf.me,
-				msg.CommandIndex, rf.log[rf.realIndexByLogIndex(rf.lastApplied)].Term)
+				msg.CommandIndex, rf.log[realIndex].Term)
 			rf.unlock()
 			rf.applyChannel <- msg
 			rf.lock("applyCommittedEntries")

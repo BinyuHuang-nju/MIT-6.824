@@ -16,7 +16,7 @@ const (
 	OpGet    = "Get"
 	OpPut    = "Put"
 	OpAppend = "Append"
-	REQUEST_TIMEOUT = time.Duration(time.Millisecond * 500)
+	REQUEST_TIMEOUT = time.Duration(time.Millisecond * 300)
 )
 
 type Op struct {
@@ -69,19 +69,12 @@ func MakeSM() *KVStateMachine {
 	return sm
 }
 
-func (sm *KVStateMachine) ReadSnapshot(data []byte) {
-	if data == nil || len(data) < 1 {
-		return
-	}
-	r := bytes.NewBuffer(data)
-	d := labgob.NewDecoder(r)
-	var st map[string]string
-	if d.Decode(&st) != nil {
-		log.Fatal("read snapshot failed.")
-	} else {
-		DPrintf("state machine read snapshot succeed.")
-		sm.data = st
-	}
+func (sm *KVStateMachine) GetSM() map[string]string {
+	return sm.data
+}
+
+func (sm *KVStateMachine) SetSM(data map[string]string) {
+	sm.data = data
 }
 
 func (sm *KVStateMachine) Get(key string) (string, Err) {
@@ -116,29 +109,54 @@ func (kv *KVServer) applyEntryToStateMachine(op Op) (Err, string) {
 	return err, val
 }
 
-func (kv *KVServer) readLastOpr(data []byte) {
+
+func (kv *KVServer) needSnapshot() bool {
+	if kv.maxraftstate == -1 { // 3A
+		return false
+	}
+	if kv.maxraftstate <= kv.rf.GetPersister().RaftStateSize() {
+		return true
+	}
+	return false
+}
+
+// should be called when snapshot updated,
+// namely when calling Snapshot or calling CondInstallSnapshot return true.
+func (kv *KVServer) encodeSnapshot() []byte {
+	w:= new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(kv.lastApplied)
+	e.Encode(kv.kvStateMachine.GetSM())
+	e.Encode(kv.lastOpr)
+	data := w.Bytes()
+	return data
+}
+
+// call Snapshot to persist snapshot, witch will call SaveStateAndSnapshot.
+// and snapshot contains one var lastApplied, and two maps: kvDB, lastOpr.
+func (kv *KVServer) takeSnapshot() {
+	// lock achieved in applier
+	snapshot := kv.encodeSnapshot()
+	kv.rf.Snapshot(kv.lastApplied, snapshot)
+}
+
+func (kv *KVServer) readSnapshotPersist(data []byte) {
 	if data == nil || len(data) < 1 {
 		return
 	}
 	r := bytes.NewBuffer(data)
 	d := labgob.NewDecoder(r)
-	var st map[int64]ApplyRecord
-	if d.Decode(&st) != nil {
-		log.Fatal("read last operations failed.")
+	var la int
+	var sm map[string]string
+	var lo map[int64]ApplyRecord
+	if d.Decode(&la) != nil || d.Decode(&sm) != nil || d.Decode(&lo) != nil {
+		log.Fatal("read lastApplied, kvStateMachine and last operations failed.")
 	} else {
-		DPrintf("read last operation succeed.")
-		kv.lastOpr = st
+		DPrintf("read lastApplied, kvStateMachine and last operation succeed.")
+		kv.lastApplied = la
+		kv.kvStateMachine.SetSM(sm)
+		kv.lastOpr = lo
 	}
-}
-
-// should be called when snapshot updated,
-// namely when calling Snapshot or calling CondInstallSnapshot return true.
-func (kv *KVServer) persistLastOpr() {
-	w := new(bytes.Buffer)
-	e := labgob.NewEncoder(w)
-	e.Encode(kv.lastOpr)
-	data := w.Bytes()
-	kv.rf.GetPersister().SaveLastoprs(data)
 }
 
 func (kv *KVServer) isDuplicated(op string, clientId int64, commandId int) bool {
@@ -190,7 +208,7 @@ func (kv *KVServer) getNotifyCh(index int) (chan NotifyMsg, bool) {
 	// achieve lock in applier
 	ch, ok := kv.notifyChs[index]
 	if !ok {
-		DPrintf("applier wants to get NotifyCh[%d] but it not exists", index)
+		fmt.Printf("applier wants to get NotifyCh[%d] but it not exists \n", index)
 	}
 	return ch, ok
 }
@@ -225,7 +243,7 @@ func (kv *KVServer) processNotifyCh(op Op) NotifyMsg {
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
 	_, isLeader, hint := kv.rf.GetStateAndLeader()
-	DPrintf("server [%d]: isLeader %v, leaderHint %d", kv.me, isLeader, hint)
+	// DPrintf("server [%d]: isLeader %v, leaderHint %d", kv.me, isLeader, hint)
 	if !isLeader {
 		reply.Err = ErrWrongLeader
 		reply.LeaderHint = hint
@@ -249,7 +267,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	}
 	kv.mu.Unlock()
 	_, isLeader, hint := kv.rf.GetStateAndLeader()
-	DPrintf("server [%d]: isLeader %v, leaderHint %d", kv.me, isLeader, hint)
+	// DPrintf("server [%d]: isLeader %v, leaderHint %d", kv.me, isLeader, hint)
 	if !isLeader {
 		reply.Err = ErrWrongLeader
 		reply.LeaderHint = hint
@@ -288,7 +306,7 @@ func (kv *KVServer) applier() {
 			if msg.CommandValid {
 				kv.mu.Lock()
 				if msg.CommandIndex <= kv.lastApplied {
-					DPrintf("msg.CommandIndex %d <= kv.lastApplied %d", msg.CommandIndex, kv.lastApplied)
+					fmt.Printf("msg.CommandIndex %d <= kv.lastApplied %d \n", msg.CommandIndex, kv.lastApplied)
 					kv.mu.Unlock()
 					continue
 				}
@@ -297,9 +315,9 @@ func (kv *KVServer) applier() {
 				case int:
 					// since we add a no-op command when a peer becomes leader,
 					// we should not consider this command
-					term, _ := kv.rf.GetState()
+					term := msg.CommandTerm // may not equals to term in kv.rf.GetState()
 					if kv.maxSeenTerm >= term {
-						DPrintf("kv.maxSeenTerm >= rf.currentTerm")
+						fmt.Println("kv.maxSeenTerm >= msg.CommandTerm")
 					}
 					kv.maxSeenTerm = term
 					kv.mu.Unlock()
@@ -313,7 +331,8 @@ func (kv *KVServer) applier() {
 							op.ClientId, op.CommandId, kv.lastOpr[op.ClientId])
 						not.Error = kv.lastOpr[op.ClientId].Error
 					} else {
-						// update state machine or get value from it.
+						// update state machine or get value from it, no matter when server's state
+						// has updated since command applied means it will persist.
 						err, val := kv.applyEntryToStateMachine(op)
 						not.Error, not.Value = err, val
 						// when op is Put or Append, we need to update lastOperation ever seen of this clientId.
@@ -336,23 +355,34 @@ func (kv *KVServer) applier() {
 				default:
 					log.Fatalf("unknown command type %T", msg.Command)
 				}
-				// check if service needs to take snapshot
-				// TODO
+				// check if service needs to take snapshot, then persist snapshot, lastApplied, lastOpr here.
+				if kv.needSnapshot() {
+					kv.takeSnapshot()
+				}
 				kv.mu.Unlock()
-			} else if msg.SnapshotValid {
-
+			} else if msg.SnapshotValid { // from leader's InstallSnapshot
+				kv.mu.Lock()
+				if kv.lastApplied > msg.SnapshotIndex || kv.maxSeenTerm > msg.SnapshotTerm {
+					log.Fatalf("SnapshotValid, but kv.lastApplied %d > msg.SnapshotIndex %d \n", kv.lastApplied, msg.SnapshotIndex)
+				}
+				// check if raft accepts snapshot, then persist
+				if kv.rf.CondInstallSnapshot(msg.SnapshotTerm, msg.SnapshotIndex, msg.Snapshot) {
+					kv.lastApplied = msg.SnapshotIndex
+					kv.maxSeenTerm = msg.SnapshotTerm
+					kv.readSnapshotPersist(msg.Snapshot)
+					if kv.lastApplied != msg.SnapshotIndex {
+						fmt.Printf("SnapshotValid, but kv.lastApplied %d != msg.SnapshotIndex %d\n", kv.lastApplied, msg.SnapshotIndex)
+					}
+				}
+				kv.mu.Unlock()
 			} else {
 				log.Fatal("unknown ApplyMsg type.")
 			}
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
-func printType(i interface{}) {
-	t := fmt.Sprintf("%T", i)
-	fmt.Println(t)
-}
 
 //
 // servers[] contains the ports of the set of
@@ -391,8 +421,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	kv.lastApplied = kv.rf.GetSnapshotIndex()
 	kv.maxSeenTerm = kv.rf.GetSnapshotTerm()
-	kv.kvStateMachine.ReadSnapshot(kv.rf.GetPersister().ReadSnapshot())
-	kv.readLastOpr(kv.rf.GetPersister().ReadLastoprs())
+	kv.readSnapshotPersist(kv.rf.GetPersister().ReadSnapshot())
 
 	// You may need initialization code here.
 	go kv.applier()

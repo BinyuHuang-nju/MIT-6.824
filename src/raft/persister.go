@@ -84,7 +84,7 @@ func (ps *Persister) SnapshotSize() int {
 	return len(ps.snapshot)
 }
 
-// add data lastOprs for lab3
+// add data lastApplied + lastOpr for lab3
 func (ps *Persister) SaveLastoprs(lastOprs []byte) {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()

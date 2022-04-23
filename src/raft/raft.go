@@ -64,7 +64,7 @@ const (
 	HEARTBEAT_INTERVAL    time.Duration = time.Millisecond * 100
 	ELECTION_TIMEOUT_BASE int = 300
 	LOCK_TIMEOUT          time.Duration = time.Millisecond * 20
-	COMMIT_TIMEOUT	      = time.Millisecond * 50
+	COMMIT_TIMEOUT	      = time.Millisecond * 20
 	DEFAULT_AELENGTH      int = 5  // the maximum amount of entries in AERequest
 )
 
@@ -534,7 +534,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		}
 	}()
 */
-
+	// start this goroutine to log
+/*
 	go func() {
 		for !rf.killed() {
 			rf.lock("log")
@@ -546,6 +547,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			time.Sleep(time.Second)
 		}
 	}()
-
+*/
 	return rf
 }

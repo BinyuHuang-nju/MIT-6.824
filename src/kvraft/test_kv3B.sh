@@ -2,5 +2,5 @@
 
 for i in $(seq 1 1 15)
 do
-	go test -run 3A -race
+	go test -run 3B
 done

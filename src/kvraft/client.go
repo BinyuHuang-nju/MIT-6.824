@@ -132,7 +132,7 @@ func (ck *Clerk) Get(key string) string {
 				ck.convertSessionServer(reply.LeaderHint)
 				DPrintf("client [%v]: request Get with key and commandId (%v, %d) wrong leader, convert to server %d",
 					ck.clientId, key, args.CommandId, ck.leaderId)
-				time.Sleep(WAITFOR_ELECTION_INTERVAL)
+				// time.Sleep(WAITFOR_ELECTION_INTERVAL)
 			default:
 				log.Fatal("Err type no seen.")
 			}
@@ -182,7 +182,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 				ck.convertSessionServer(reply.LeaderHint)
 				DPrintf("client [%v]: request %v with key,value (%v, %v) and commandId %d wrong leader, convert to server %d",
 					ck.clientId, op, key, value, args.CommandId, ck.leaderId)
-				time.Sleep(WAITFOR_ELECTION_INTERVAL)
+				// time.Sleep(WAITFOR_ELECTION_INTERVAL)
 			default:
 				log.Fatal("Err type no seen.")
 			}

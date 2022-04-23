@@ -681,6 +681,8 @@ func TestSnapshotSize3B(t *testing.T) {
 	cfg.end()
 }
 
+
+// test_test.go:413: Operations completed too slowly 107.552858ms/op > 33.333333ms/op
 func TestSpeed3B(t *testing.T) {
 	GenericTestSpeed(t, "3B", 1000)
 }
@@ -690,6 +692,8 @@ func TestSnapshotRecover3B(t *testing.T) {
 	GenericTest(t, "3B", 1, 5, false, true, false, 1000, false)
 }
 
+// 从该test开始的三个有多个 applier wants to get NotifyCh[..] but it not exists
+// event theoretically impossible happens: two leaders in a certain term.
 func TestSnapshotRecoverManyClients3B(t *testing.T) {
 	// Test: restarts, snapshots, many clients (3B) ...
 	GenericTest(t, "3B", 20, 5, false, true, false, 1000, false)
@@ -705,6 +709,8 @@ func TestSnapshotUnreliableRecover3B(t *testing.T) {
 	GenericTest(t, "3B", 5, 5, true, true, false, 1000, false)
 }
 
+// panic: runtime error: index out of range [82] with length 7
+// 定位到  /src/raft/utils.go:78 -> src/raft/appendEntries.go:78
 func TestSnapshotUnreliableRecoverConcurrentPartition3B(t *testing.T) {
 	// Test: unreliable net, restarts, partitions, snapshots, many clients (3B) ...
 	GenericTest(t, "3B", 5, 5, true, true, true, 1000, false)
