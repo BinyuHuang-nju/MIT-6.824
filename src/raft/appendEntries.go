@@ -75,7 +75,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 				// rf.log = rf.log[:args.PrevLogIndex] // truncate inconsistent entries
 				rf.log = rf.subLog(0, rf.realIndexByLogIndex(args.PrevLogIndex))
 
-				reply.ConflictIndex = rf.firstIndexForTerm(standardTerm, args.PrevLogIndex)
+				reply.ConflictIndex = rf.firstIndexForTerm(standardTerm, rf.realIndexByLogIndex(args.PrevLogIndex))
 				reply.ConflictTerm = standardTerm
 			}
 		}

@@ -5,16 +5,8 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="6338b902-87fa-4349-8447-aa10da898558" name="Default Changelist" comment="">
-      <change afterPath="$PROJECT_DIR$/src/kvraft/test_kv3B.sh" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/kvraft/client.go" beforeDir="false" afterPath="$PROJECT_DIR$/src/kvraft/client.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/kvraft/server.go" beforeDir="false" afterPath="$PROJECT_DIR$/src/kvraft/server.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/kvraft/test_kv3A.sh" beforeDir="false" afterPath="$PROJECT_DIR$/src/kvraft/test_kv3A.sh" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/kvraft/test_test.go" beforeDir="false" afterPath="$PROJECT_DIR$/src/kvraft/test_test.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/raft/commitAndApply.go" beforeDir="false" afterPath="$PROJECT_DIR$/src/raft/commitAndApply.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/raft/persister.go" beforeDir="false" afterPath="$PROJECT_DIR$/src/raft/persister.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/raft/raft.go" beforeDir="false" afterPath="$PROJECT_DIR$/src/raft/raft.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/raft/appendEntries.go" beforeDir="false" afterPath="$PROJECT_DIR$/src/raft/appendEntries.go" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -62,7 +54,7 @@
     <property name="last_opened_file_path" value="$PROJECT_DIR$" />
     <property name="settings.editor.selected.configurable" value="com.goide.configuration.GoLibrariesConfigurableProvider" />
   </component>
-  <component name="RunManager" selected="Go Test.TestBasic3A in 6.824/kvraft">
+  <component name="RunManager" selected="Go Test.TestSnapshotUnreliableRecoverConcurrentPartition3B in 6.824/kvraft">
     <configuration name="TestBasic3A in 6.824/kvraft" type="GoTestRunConfiguration" factoryName="Go Test" temporary="true" nameIsGenerated="true">
       <module name="6.824" />
       <working_directory value="$PROJECT_DIR$/src/kvraft" />
@@ -96,6 +88,17 @@
       <pattern value="^\QTestSnapshotInstallUnCrash2D\E$" />
       <method v="2" />
     </configuration>
+    <configuration name="TestSnapshotUnreliableRecoverConcurrentPartition3B in 6.824/kvraft" type="GoTestRunConfiguration" factoryName="Go Test" temporary="true" nameIsGenerated="true">
+      <module name="6.824" />
+      <working_directory value="$PROJECT_DIR$/src/kvraft" />
+      <framework value="gotest" />
+      <kind value="PACKAGE" />
+      <package value="6.824/kvraft" />
+      <directory value="$PROJECT_DIR$" />
+      <filePath value="$PROJECT_DIR$" />
+      <pattern value="^\QTestSnapshotUnreliableRecoverConcurrentPartition3B\E$" />
+      <method v="2" />
+    </configuration>
     <configuration name="TestSpeed3A in 6.824/kvraft" type="GoTestRunConfiguration" factoryName="Go Test" temporary="true" nameIsGenerated="true">
       <module name="6.824" />
       <working_directory value="$PROJECT_DIR$/src/kvraft" />
@@ -107,24 +110,13 @@
       <pattern value="^\QTestSpeed3A\E$" />
       <method v="2" />
     </configuration>
-    <configuration name="TestUnreliableAgree2C in 6.824/raft" type="GoTestRunConfiguration" factoryName="Go Test" temporary="true" nameIsGenerated="true">
-      <module name="6.824" />
-      <working_directory value="$PROJECT_DIR$/src/raft" />
-      <framework value="gotest" />
-      <kind value="PACKAGE" />
-      <package value="6.824/raft" />
-      <directory value="$PROJECT_DIR$" />
-      <filePath value="$PROJECT_DIR$" />
-      <pattern value="^\QTestUnreliableAgree2C\E$" />
-      <method v="2" />
-    </configuration>
     <recent_temporary>
       <list>
+        <item itemvalue="Go Test.TestSnapshotUnreliableRecoverConcurrentPartition3B in 6.824/kvraft" />
         <item itemvalue="Go Test.TestBasic3A in 6.824/kvraft" />
         <item itemvalue="Go Test.TestSpeed3A in 6.824/kvraft" />
         <item itemvalue="Go Test.TestSnapshotBasic2D in 6.824/raft" />
         <item itemvalue="Go Test.TestSnapshotInstallUnCrash2D in 6.824/raft" />
-        <item itemvalue="Go Test.TestUnreliableAgree2C in 6.824/raft" />
       </list>
     </recent_temporary>
   </component>
