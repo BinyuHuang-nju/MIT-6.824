@@ -61,11 +61,12 @@ const (
 )
 
 const (
-	HEARTBEAT_INTERVAL    time.Duration = time.Millisecond * 100
+	HEARTBEAT_INTERVAL    time.Duration = time.Millisecond * 75
 	ELECTION_TIMEOUT_BASE int = 300
 	LOCK_TIMEOUT          time.Duration = time.Millisecond * 20
 	COMMIT_TIMEOUT	      = time.Millisecond * 20
-	DEFAULT_AELENGTH      int = 5  // the maximum amount of entries in AERequest
+	DEFAULT_AELENGTH      int = 500  // the maximum amount of entries in AERequest
+	                                 // 5 -> 500, speed of lab3 107 -> 81
 )
 
 //

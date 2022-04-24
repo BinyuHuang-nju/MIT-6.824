@@ -711,6 +711,7 @@ func TestSnapshotUnreliableRecover3B(t *testing.T) {
 
 // panic: runtime error: index out of range [82] with length 7
 // 定位到  /src/raft/utils.go:78 -> src/raft/appendEntries.go:78
+// firstIndexForTerm中的形参为绝对index，改为相对index即可
 func TestSnapshotUnreliableRecoverConcurrentPartition3B(t *testing.T) {
 	// Test: unreliable net, restarts, partitions, snapshots, many clients (3B) ...
 	GenericTest(t, "3B", 5, 5, true, true, true, 1000, false)

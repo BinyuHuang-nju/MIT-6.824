@@ -127,6 +127,9 @@ func (rf *Raft) broadcastAppendEntries() {
 			continue
 		}
 		rf.lock("checkSendType")
+		if rf.state != STATE_LEADER {
+			break
+		}
 		prevLogIndex := rf.nextIndex[i] - 1
 		if prevLogIndex < rf.lastSnapshotIndex {
 			// only snapshot can make this server catch up

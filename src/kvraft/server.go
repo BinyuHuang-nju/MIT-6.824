@@ -16,7 +16,7 @@ const (
 	OpGet    = "Get"
 	OpPut    = "Put"
 	OpAppend = "Append"
-	REQUEST_TIMEOUT = time.Duration(time.Millisecond * 300)
+	REQUEST_TIMEOUT = time.Duration(time.Millisecond * 500)
 )
 
 type Op struct {
@@ -56,41 +56,6 @@ type KVServer struct {
 
 	notifyChs map[int]chan NotifyMsg   // commandIndex -> channel
 	lastOpr   map[int64]ApplyRecord    // clientId -> [latest commandId + command info]
-}
-
-type KVStateMachine struct {
-	data map[string]string
-}
-
-func MakeSM() *KVStateMachine {
-	sm := &KVStateMachine{
-		data: make(map[string]string),
-	}
-	return sm
-}
-
-func (sm *KVStateMachine) GetSM() map[string]string {
-	return sm.data
-}
-
-func (sm *KVStateMachine) SetSM(data map[string]string) {
-	sm.data = data
-}
-
-func (sm *KVStateMachine) Get(key string) (string, Err) {
-	if val, ok := sm.data[key]; ok {
-		return val, OK
-	}
-	return "", ErrNoKey
-}
-
-func (sm *KVStateMachine) Put(key string, value string) Err {
-	sm.data[key] = value
-	return OK
-}
-func (sm *KVStateMachine) Append(key string, value string) Err {
-	sm.data[key] += value
-	return OK
 }
 
 func (kv *KVServer) applyEntryToStateMachine(op Op) (Err, string) {
@@ -208,7 +173,7 @@ func (kv *KVServer) getNotifyCh(index int) (chan NotifyMsg, bool) {
 	// achieve lock in applier
 	ch, ok := kv.notifyChs[index]
 	if !ok {
-		fmt.Printf("applier wants to get NotifyCh[%d] but it not exists \n", index)
+		DPrintf("applier wants to get NotifyCh[%d] but it not exists \n", index)
 	}
 	return ch, ok
 }
