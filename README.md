@@ -27,7 +27,7 @@ MIT 6.824 课程的学习资料 代码更新为2021版
 - [x]	3A pass
 	- test: sh ./test_kv3A.sh
 	- [ ] (TestSpeed3A fail, operations completed too slowly)  
-- [ ]   3B  
+- [x]   3B  
 	- test: sh ./test_kv3B.sh  
 	- [ ] (TestSpeed3B fail, operations completed too slowly)  
 - 目前看系统性能还存在缺陷，可提升角度:
