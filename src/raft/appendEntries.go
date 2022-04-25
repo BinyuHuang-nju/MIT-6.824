@@ -11,9 +11,13 @@ func (rf *Raft) makeAppendEntriesArgs(target int, isHeartbeat bool) AppendEntrie
 		length := Min(rf.logLen()-rf.nextIndex[target], DEFAULT_AELENGTH)
 		if length > 0 {
 			startIndex := rf.nextIndex[target]
+			/*
 			for i := 0; i < length; i++ {
 				entries = append(entries, rf.log[rf.realIndexByLogIndex(startIndex+i)])
 			}
+			*/
+			startRealIndex := rf.realIndexByLogIndex(startIndex)
+			entries = rf.subLog(startRealIndex, startRealIndex + length)
 		}
 	}
 	prevLogIndex := rf.nextIndex[target]-1
