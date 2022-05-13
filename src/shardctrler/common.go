@@ -1,5 +1,7 @@
 package shardctrler
 
+import "log"
+
 //
 // Shard controler: assigns shards to replication groups.
 //
@@ -70,4 +72,13 @@ type QueryReply struct {
 	WrongLeader bool
 	Err         Err
 	Config      Config
+}
+
+const Debug = false
+
+func DPrintf(format string, a ...interface{}) (n int, err error) {
+	if Debug {
+		log.Printf(format, a...)
+	}
+	return
 }

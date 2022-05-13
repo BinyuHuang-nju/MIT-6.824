@@ -182,7 +182,7 @@ func (kv *KVServer) deleteOutdatedNotifyCh(index int) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 	for k, _ := range kv.notifyChs {
-		if k <= index {
+		if k < index {
 			delete(kv.notifyChs, k)
 		}
 	}

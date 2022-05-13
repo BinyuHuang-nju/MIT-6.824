@@ -16,6 +16,7 @@ type ShardCtrler struct {
 	// Your data here.
 
 	configs []Config // indexed by config num
+	curConfigNum int // initialized to 0, with no groups and all shards assigned to GID 0.
 }
 
 

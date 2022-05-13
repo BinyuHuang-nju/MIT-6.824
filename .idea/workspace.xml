@@ -6,7 +6,9 @@
   <component name="ChangeListManager">
     <list default="true" id="6338b902-87fa-4349-8447-aa10da898558" name="Default Changelist" comment="">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/raft/appendEntries.go" beforeDir="false" afterPath="$PROJECT_DIR$/src/raft/appendEntries.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/kvraft/server.go" beforeDir="false" afterPath="$PROJECT_DIR$/src/kvraft/server.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/shardctrler/common.go" beforeDir="false" afterPath="$PROJECT_DIR$/src/shardctrler/common.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/shardctrler/server.go" beforeDir="false" afterPath="$PROJECT_DIR$/src/shardctrler/server.go" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -54,7 +56,7 @@
     <property name="last_opened_file_path" value="$PROJECT_DIR$" />
     <property name="settings.editor.selected.configurable" value="com.goide.configuration.GoLibrariesConfigurableProvider" />
   </component>
-  <component name="RunManager" selected="Go Test.TestSnapshotUnreliableRecoverConcurrentPartition3B in 6.824/kvraft">
+  <component name="RunManager" selected="Go Test.TestSnapshotRecover3B in 6.824/kvraft">
     <configuration name="TestBasic3A in 6.824/kvraft" type="GoTestRunConfiguration" factoryName="Go Test" temporary="true" nameIsGenerated="true">
       <module name="6.824" />
       <working_directory value="$PROJECT_DIR$/src/kvraft" />
@@ -77,15 +79,15 @@
       <pattern value="^\QTestSnapshotBasic2D\E$" />
       <method v="2" />
     </configuration>
-    <configuration name="TestSnapshotInstallUnCrash2D in 6.824/raft" type="GoTestRunConfiguration" factoryName="Go Test" temporary="true" nameIsGenerated="true">
+    <configuration name="TestSnapshotRecover3B in 6.824/kvraft" type="GoTestRunConfiguration" factoryName="Go Test" temporary="true" nameIsGenerated="true">
       <module name="6.824" />
-      <working_directory value="$PROJECT_DIR$/src/raft" />
+      <working_directory value="$PROJECT_DIR$/src/kvraft" />
       <framework value="gotest" />
       <kind value="PACKAGE" />
-      <package value="6.824/raft" />
+      <package value="6.824/kvraft" />
       <directory value="$PROJECT_DIR$" />
       <filePath value="$PROJECT_DIR$" />
-      <pattern value="^\QTestSnapshotInstallUnCrash2D\E$" />
+      <pattern value="^\QTestSnapshotRecover3B\E$" />
       <method v="2" />
     </configuration>
     <configuration name="TestSnapshotUnreliableRecoverConcurrentPartition3B in 6.824/kvraft" type="GoTestRunConfiguration" factoryName="Go Test" temporary="true" nameIsGenerated="true">
@@ -112,11 +114,11 @@
     </configuration>
     <recent_temporary>
       <list>
+        <item itemvalue="Go Test.TestSnapshotRecover3B in 6.824/kvraft" />
         <item itemvalue="Go Test.TestSnapshotUnreliableRecoverConcurrentPartition3B in 6.824/kvraft" />
         <item itemvalue="Go Test.TestBasic3A in 6.824/kvraft" />
         <item itemvalue="Go Test.TestSpeed3A in 6.824/kvraft" />
         <item itemvalue="Go Test.TestSnapshotBasic2D in 6.824/raft" />
-        <item itemvalue="Go Test.TestSnapshotInstallUnCrash2D in 6.824/raft" />
       </list>
     </recent_temporary>
   </component>
