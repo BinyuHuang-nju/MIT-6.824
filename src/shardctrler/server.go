@@ -388,33 +388,73 @@ func (sc *ShardCtrler) executeLeave(gids []int) Err {
 		Shards: lastConfig.Shards,
 		Groups: deepCopy(lastConfig.Groups),
 	}
-	// eliminate replica groups
-	for _, gid := range gids {
-		if _, ok := curConfig.Groups[gid]; ok {
-			delete(curConfig.Groups, gid)
+	chooseNewMethod := true
+	// in old method (annotates below), we firstly assign shards that belongs to groups that
+	// leaves, then balance shards, which may brings more movements, finally causes more pressure
+	// for groups to shift shards.
+	// so in new method, we balance shards when assigning shards to decrease movement.
+	if chooseNewMethod {                // new method
+		g2s := gid2Shards(curConfig)
+		var outstandingShards []int
+		for _, gid := range gids {
+			if _, ok := curConfig.Groups[gid]; ok {
+				delete(curConfig.Groups, gid)
+			}
+			if shards, ok := g2s[gid]; ok {
+				outstandingShards = append(outstandingShards, shards...)
+				delete(g2s, gid)
+			}
 		}
-	}
-	// adjust config to balance load, non-deterministic -> deterministic
-	g2s := gid2Shards(curConfig)
-	// pick gid with most shards to assign a shard to gid with fewest shards,
-	// until difference between any shards of gid is less than 1.
-	for {
-		maxGid, minGid := gidWithMostShardsAndFewestShards(g2s)
-		if len(g2s[maxGid]) - len(g2s[minGid]) <= 1 {
-			break
+		var s2g [NShards]int
+		if len(curConfig.Groups) == 0 {
+			for shard := 0; shard < NShards; shard++ {
+				s2g[shard] = 0  // invalid
+			}
+		} else {
+			// everytime pick a gid with fewest shards,
+			// and assign a outstanding shard to this gid.
+			for _, shard := range outstandingShards {
+				_, minGid := gidWithMostShardsAndFewestShards(g2s)
+				g2s[minGid] = append(g2s[minGid], shard)
+			}
+			for gid, shards := range g2s {
+				for _, shard := range shards {
+					s2g[shard] = gid
+				}
+			}
 		}
-		g2s[minGid] = append(g2s[minGid], g2s[maxGid][0])
-		g2s[maxGid] = g2s[maxGid][1:]
-	}
-	var s2g [NShards]int
-	for gid, shards := range g2s {
-		for _, shard := range shards {
-			s2g[shard] = gid
+		curConfig.Shards = s2g
+		sc.configs = append(sc.configs, curConfig)
+		sc.curConfigNum++
+	} else {                            // old method
+		// eliminate replica groups
+		for _, gid := range gids {
+			if _, ok := curConfig.Groups[gid]; ok {
+				delete(curConfig.Groups, gid)
+			}
 		}
+		// adjust config to balance load, non-deterministic -> deterministic
+		g2s := gid2Shards(curConfig)
+		// pick gid with most shards to assign a shard to gid with fewest shards,
+		// until difference between any shards of gid is less than 1.
+		for {
+			maxGid, minGid := gidWithMostShardsAndFewestShards(g2s)
+			if len(g2s[maxGid]) - len(g2s[minGid]) <= 1 {
+				break
+			}
+			g2s[minGid] = append(g2s[minGid], g2s[maxGid][0])
+			g2s[maxGid] = g2s[maxGid][1:]
+		}
+		var s2g [NShards]int
+		for gid, shards := range g2s {
+			for _, shard := range shards {
+				s2g[shard] = gid
+			}
+		}
+		curConfig.Shards = s2g
+		sc.configs = append(sc.configs, curConfig)
+		sc.curConfigNum++
 	}
-	curConfig.Shards = s2g
-	sc.configs = append(sc.configs, curConfig)
-	sc.curConfigNum++
 	return OK
 }
 

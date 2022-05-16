@@ -32,7 +32,12 @@ MIT 6.824 课程的学习资料 代码更新为2021版
 	- [ ] (TestSpeed3B fail, operations completed too slowly)  
 - 目前看系统性能还存在缺陷，可提升角度:
 	- client通过更少尝试连接次数与最新leader连接  
-	- 读优化，对Get采用ReadIndex或LeaseRead方式减轻log与广播负担
+	- 读优化，对Get采用ReadIndex或LeaseRead方式减轻log与广播负担  
+
+### lab4
+- [x]	4 shard controller pass
+	- test: sh ./test.sh
+- [ ]	4 shard kv  
 
 ## 课程安排 Schedule
 
