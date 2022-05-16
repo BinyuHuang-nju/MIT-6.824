@@ -45,6 +45,8 @@ func (ck *Clerk) Query(num int) Config {
 	ck.commandId++
 	for {
 		// try each known server.
+		DPrintf("client [%v]: send request Query with num and commandId (%v, %d) to servers",
+			ck.clientId, num, args.CommandId)
 		for _, srv := range ck.servers {
 			var reply QueryReply
 			ok := srv.Call("ShardCtrler.Query", args, &reply)
@@ -65,6 +67,8 @@ func (ck *Clerk) Join(servers map[int][]string) {
 	ck.commandId++
 	for {
 		// try each known server.
+		DPrintf("client [%v]: send request Join with commandId %d to servers",
+			ck.clientId, args.CommandId)
 		for _, srv := range ck.servers {
 			var reply JoinReply
 			ok := srv.Call("ShardCtrler.Join", args, &reply)
@@ -85,6 +89,8 @@ func (ck *Clerk) Leave(gids []int) {
 	ck.commandId++
 	for {
 		// try each known server.
+		DPrintf("client [%v]: send request Leave with commandId %d to servers",
+			ck.clientId, args.CommandId)
 		for _, srv := range ck.servers {
 			var reply LeaveReply
 			ok := srv.Call("ShardCtrler.Leave", args, &reply)
@@ -106,6 +112,8 @@ func (ck *Clerk) Move(shard int, gid int) {
 	ck.commandId++
 	for {
 		// try each known server.
+		DPrintf("client [%v]: send request Move with commandId %d to servers",
+			ck.clientId, args.CommandId)
 		for _, srv := range ck.servers {
 			var reply MoveReply
 			ok := srv.Call("ShardCtrler.Move", args, &reply)

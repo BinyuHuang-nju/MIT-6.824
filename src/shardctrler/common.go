@@ -1,6 +1,9 @@
 package shardctrler
 
-import "log"
+import (
+	"fmt"
+	"log"
+)
 
 //
 // Shard controler: assigns shards to replication groups.
@@ -91,4 +94,28 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 		log.Printf(format, a...)
 	}
 	return
+}
+
+func deepCopy(g map[int][]string) map[int][]string {
+	res := make(map[int][]string)
+	for gid, s := range g {
+		res[gid] = append([]string{}, s...)
+	}
+	return res
+}
+
+func (cf *Config) Copy() Config {
+	config := Config{
+		Num:    cf.Num,
+		Shards: cf.Shards,
+		Groups: deepCopy(cf.Groups),
+	}
+	return config
+}
+
+func printConfig(cf Config) {
+	fmt.Printf("cf.Num = %d \n", cf.Num)
+	for i := 0; i < NShards; i++ {
+		fmt.Printf("shard %d belongs to gid %d \n", i, cf.Shards[i])
+	}
 }

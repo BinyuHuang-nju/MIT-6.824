@@ -4,6 +4,7 @@ import (
 	"6.824/raft"
 	"fmt"
 	"log"
+	"sort"
 	"sync/atomic"
 	"time"
 )
@@ -74,9 +75,9 @@ func (sc *ShardCtrler) isDuplicated(op string, clientId int64, commandId int) bo
 
 func (sc *ShardCtrler) getConfigByIndex(index int) Config {
 	if index < 0 || index >= sc.curConfigNum {
-		return sc.configs[sc.curConfigNum-1]
+		return sc.configs[sc.curConfigNum-1].Copy()
 	}
-	return sc.configs[index]
+	return sc.configs[index].Copy()
 }
 
 func (sc *ShardCtrler) makeOp(args interface{}) Op {
@@ -222,7 +223,7 @@ func (sc *ShardCtrler) Query(args *QueryArgs, reply *QueryReply) {
 	sc.mu.Lock()
 	// since data in Configs have been committed and applied, and will not be modified,
 	// we can just respond no matter the server the client connects is not leader or disconnected with quorum.
-	if args.Num >= 0 || args.Num < sc.curConfigNum {
+	if args.Num >= 0 && args.Num < sc.curConfigNum {
 		reply.Err = OK
 		reply.WrongLeader = false
 		reply.Config = sc.getConfigByIndex(args.Num)
@@ -245,18 +246,215 @@ func (sc *ShardCtrler) Query(args *QueryArgs, reply *QueryReply) {
 	}
 }
 
+// generate map of gid -> shards according to config
+func gid2Shards(config Config) map[int][]int {
+	g2s := make(map[int][]int)
+	var shardsToBeAssigned []int
+	// 1, groups with shards
+	for shard, gid := range config.Shards {
+		if _, ok := config.Groups[gid]; !ok {
+			// some shards become unassigned because of Leave
+			shardsToBeAssigned = append(shardsToBeAssigned, shard)
+			continue
+		}
+		_, ok := g2s[gid]
+		if !ok {
+			g2s[gid] = []int{}
+		}
+		g2s[gid] = append(g2s[gid], shard)
+	}
+	// 2, groups without shards
+	for gid, _ := range config.Groups {
+		// some groups do not have shards because of Join
+		if _, ok := g2s[gid]; !ok {
+			g2s[gid] = []int{}
+		}
+	}
+	// 3, maybe after a Leave, there exists no groups, so
+	//    let all shards point to gid 0
+	var keys []int
+	for k := range g2s {
+		keys = append(keys, k)
+	}
+	if len(keys) == 0 || (len(keys) == 1 && keys[0] == 0) { // only gid 0 in config
+		g2s[0] = []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
+		return g2s
+	}
+	// 4, maybe after a Join, there exists new groups, so
+	//    gid 0 is invalid, assign shards pointing to gid 0 to other gids
+	trigger := 0
+	sort.Ints(keys)
+
+	if shards, ok := g2s[0]; ok {
+		delete(g2s, 0)
+		keys = keys[1:] // delete gid 0
+		cur := len(shards)-1
+		for cur >= 0 { // divide evenly
+			for _, k := range keys {
+				if cur < 0 {
+					break
+				}
+				g2s[k] = append(g2s[k], shards[cur])
+				cur--
+			}
+		}
+		trigger++
+	}
+	// 5, assign shards unassigned to groups that exists after a Leave,
+	// so in principle con.4 and con.5 should not be triggered at the same time.
+	// we process this condition after processing gid 0 just in case 4 and 5 are triggered together.
+	if len(shardsToBeAssigned) > 0 {
+		cur := len(shardsToBeAssigned)-1
+		for cur >= 0 {
+			for _, k := range keys {
+				if cur < 0 {
+					break
+				}
+				g2s[k] = append(g2s[k], shardsToBeAssigned[cur])
+				cur--
+			}
+		}
+		trigger++
+	}
+	if trigger == 2 {
+		fmt.Println("g2s[0] existing and shardsToBeAssigned not null are established at the same time.")
+	}
+	return g2s
+}
+
+// to make each operation deterministic, we should
+// maintain a separate data structure that specifies that order.
+func gidWithMostShardsAndFewestShards(g2s map[int][]int) (int, int) {
+	var keys []int
+	for k := range g2s {
+		keys = append(keys, k)
+	}
+	sort.Ints(keys)
+	maxIdx, max, minIdx, min := -1, -1, -1, NShards+1
+	for _, gid := range keys {
+		if len(g2s[gid]) < min {
+			minIdx, min = gid, len(g2s[gid])
+		}
+		if len(g2s[gid]) > max {
+			maxIdx, max = gid, len(g2s[gid])
+		}
+	}
+	return maxIdx, minIdx
+}
+
+func (sc *ShardCtrler) executeJoin(newGroups map[int][]string) Err {
+	lastConfig := sc.configs[sc.curConfigNum-1]
+	curConfig := Config{
+		Num:    sc.curConfigNum,
+		Shards: lastConfig.Shards,
+		Groups: deepCopy(lastConfig.Groups),
+	}
+	// add new replica groups
+	for gid, servers := range newGroups {
+		if _, ok := curConfig.Groups[gid]; !ok {
+			newServers := make([]string, len(servers))
+			copy(newServers, servers)
+			curConfig.Groups[gid] = newServers
+		}
+	}
+	// adjust config to balance load, non-deterministic -> deterministic
+	g2s := gid2Shards(curConfig)
+	// pick gid with most shards to assign a shard to gid with fewest shards,
+	// until difference between any shards of gid is less than 1.
+	for {
+		maxGid, minGid := gidWithMostShardsAndFewestShards(g2s)
+		if len(g2s[maxGid]) - len(g2s[minGid]) <= 1 {
+			break
+		}
+		g2s[minGid] = append(g2s[minGid], g2s[maxGid][0])
+		g2s[maxGid] = g2s[maxGid][1:]
+	}
+	var s2g [NShards]int
+	for gid, shards := range g2s {
+		for _, shard := range shards {
+			s2g[shard] = gid
+		}
+	}
+	curConfig.Shards = s2g
+	sc.configs = append(sc.configs, curConfig)
+	sc.curConfigNum++
+	return OK
+}
+
+func (sc *ShardCtrler) executeLeave(gids []int) Err {
+	lastConfig := sc.configs[sc.curConfigNum-1]
+	curConfig := Config{
+		Num:    sc.curConfigNum,
+		Shards: lastConfig.Shards,
+		Groups: deepCopy(lastConfig.Groups),
+	}
+	// eliminate replica groups
+	for _, gid := range gids {
+		if _, ok := curConfig.Groups[gid]; ok {
+			delete(curConfig.Groups, gid)
+		}
+	}
+	// adjust config to balance load, non-deterministic -> deterministic
+	g2s := gid2Shards(curConfig)
+	// pick gid with most shards to assign a shard to gid with fewest shards,
+	// until difference between any shards of gid is less than 1.
+	for {
+		maxGid, minGid := gidWithMostShardsAndFewestShards(g2s)
+		if len(g2s[maxGid]) - len(g2s[minGid]) <= 1 {
+			break
+		}
+		g2s[minGid] = append(g2s[minGid], g2s[maxGid][0])
+		g2s[maxGid] = g2s[maxGid][1:]
+	}
+	var s2g [NShards]int
+	for gid, shards := range g2s {
+		for _, shard := range shards {
+			s2g[shard] = gid
+		}
+	}
+	curConfig.Shards = s2g
+	sc.configs = append(sc.configs, curConfig)
+	sc.curConfigNum++
+	return OK
+}
+
+func (sc *ShardCtrler) executeMove(shard, gid int) Err {
+	lastConfig := sc.configs[sc.curConfigNum-1]
+	curConfig := Config{
+		Num:    sc.curConfigNum,
+		Shards: lastConfig.Shards,
+		Groups: deepCopy(lastConfig.Groups),
+	}
+	// move shards between replica groups
+	if _, ok := curConfig.Groups[gid]; !ok {
+		log.Fatalf("Move gid %d not exists in groups. \n", gid)
+	}
+	curConfig.Shards[shard] = gid
+	sc.configs = append(sc.configs, curConfig)
+	sc.curConfigNum++
+	return OK
+}
+
+func (sc *ShardCtrler) executeQuery(num int) (Err, Config) {
+	return OK, sc.getConfigByIndex(num)
+}
+
 func (sc *ShardCtrler) applyConfigOperation(op Op) (Err, Config) {
 	var err Err
 	var cf Config
 	switch op.Opr {
 	case ConfigOpJoin:
+		err = sc.executeJoin(op.JoinServers)
 	case ConfigOpLeave:
+		err = sc.executeLeave(op.LeaveGIDs)
 	case ConfigOpMove:
+		err = sc.executeMove(op.MoveShard, op.MoveGID)
 	case ConfigOpQuery:
+		err, cf = sc.executeQuery(op.QueryNum)
 	default:
 		log.Fatal("unknown op type when applying config operation to shard controller config")
 	}
-	//TODO
+	return err, cf
 }
 
 func (sc *ShardCtrler) killed() bool {
@@ -298,11 +496,29 @@ func (sc *ShardCtrler) applier() {
 					} else {
 						// update config or query config, no matter when server's state
 						// has updated since command applied means it will persist.
-
+						err, cf := sc.applyConfigOperation(op)
+						not.Error, not.Cf = err, cf
+						// when op is Join/Leave/Move, we need to update lastOperation ever seen of this clientId.
+						if op.Opr != ConfigOpQuery {
+							ar := ApplyRecord{
+								CommandId: op.CommandId,
+								Error:     err ,
+							}
+							sc.lastOpr[op.ClientId] = ar
+						}
+					}
+					// is case that a peer has changed its state,
+					// the request of CommandIndex in Start it refers may convert to another request.
+					if currentTerm, isLeader := sc.rf.GetState(); isLeader && currentTerm == msg.CommandTerm {
+						ch, ok := sc.getNotifyCh(msg.CommandIndex)
+						if ok {
+							ch <- not
+						}
 					}
 				default:
 					log.Fatalf("unknown command type %T", msg.Command)
 				}
+				sc.mu.Unlock()
 			} else if msg.SnapshotValid {
 				log.Fatal(" illegal ApplyMsg type Snapshot, for snapshot not applied here.")
 			} else {

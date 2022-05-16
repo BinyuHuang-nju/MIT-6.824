@@ -127,6 +127,8 @@ func TestBasic(t *testing.T) {
 		cfg.ShutdownServer(s)
 		for i := 0; i < len(cfa); i++ {
 			c := ck.Query(cfa[i].Num)
+			// printConfig(c)
+			// printConfig(cfa[i])
 			check_same_config(t, c, cfa[i])
 		}
 		cfg.StartServer(s)
@@ -386,7 +388,7 @@ func TestMulti(t *testing.T) {
 		t.Fatalf("Leader not found")
 	}
 	c := ck.Query(-1) // Config leader claims
-
+	// printConfig(c)
 	cfg.ShutdownServer(leader)
 
 	attempts := 0
@@ -397,6 +399,7 @@ func TestMulti(t *testing.T) {
 	}
 
 	c1 = ck.Query(-1)
+	// printConfig(c1)
 	check_same_config(t, c, c1)
 
 	fmt.Printf("  ... Passed\n")
