@@ -33,11 +33,13 @@ MIT 6.824 课程的学习资料 代码更新为2021版
 - 目前看系统性能还存在缺陷，可提升角度:
 	- client通过更少尝试连接次数与最新leader连接  
 	- 读优化，对Get采用ReadIndex或LeaseRead方式减轻log与广播负担  
+- 由于对读请求处理逻辑与写请求类似，需要经过多数派的log确认，故该系统满足读写linearizability，但代价是由于ReadRequest的传输和log持久化而带来的更大的网络开销和空间开销。像Zookeeper采用Fast Read的本地读/Sync同步读对读性能有巨大提升，但使得一致性在read上仅满足sequential consistency，这之间的trade-off取决于具体系统的应用场景。  
 
 ### lab4
 - [x]	4 shard controller pass
 	- test: sh ./test.sh
-- [ ]	4 shard kv  
+	- 与lab3类似，client端实现是被简化的，每个client每次仅执行一个请求并等待直至接收到正确回复而不考虑并发发送请求，若加入并发需要server/client端对接收到的请求顺序做进一步判断和处理，否则可能会违背linerizability和FIFO client order。    
+- [ ]	4 shard kv TODO  
 
 ## 课程安排 Schedule
 
