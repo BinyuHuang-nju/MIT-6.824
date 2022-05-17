@@ -8,7 +8,8 @@ MIT 6.824 课程的学习资料 代码更新为2021版
 
 ### lab1
 -	MapReduce Paper(OSDI'06)  
-- [x]	Pass
+- [x]	Pass  
+- coordinator只负责分配任务，全程不会接触数据，且仅当所有map任务完成后才会分发reduce任务；系统中会产生NMap*NReduce个中间数据集，本lab中因为所有worker部署在本地可以直接访问到，一般来说reduce任务worker需要通过RPC来访问到中间数据。  
 
 ### lab2  
 -	Raft Paper(Extended 14)  
@@ -21,6 +22,9 @@ MIT 6.824 课程的学习资料 代码更新为2021版
 	- [ ] (TestFigure8Unreliable2C often fails) 
 - [x]   2D pass
 	- test: sh ./test_snapshot.sh  
+- 注意点
+	- log采用WAL，需要保证每次回复前已经被持久化
+	- commitIndex不可以被持久化，因为Raft采用保守的commit思想，故宕机后重启加入集群的commitIndex可能比原来小，故需要有当前term的entry被commit后其前序entry被认为committed，所有一般某节点被选为leader后直接生成一个当前term日志项来加速commit更合适。在Zab中采用激进的commit思想，即其不管宕机、任何时刻，commitIndex都是单调递增的。
 
 ### lab3
 -	OngaroPhD Paper(Sec.6)  
