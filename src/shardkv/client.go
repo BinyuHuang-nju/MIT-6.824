@@ -8,7 +8,10 @@ package shardkv
 // talks to the group that holds the key's shard.
 //
 
-import "6.824/labrpc"
+import (
+	"6.824/labrpc"
+	"log"
+)
 import "crypto/rand"
 import "math/big"
 import "6.824/shardctrler"
@@ -40,6 +43,8 @@ type Clerk struct {
 	config   shardctrler.Config
 	make_end func(string) *labrpc.ClientEnd
 	// You will have to modify this struct.
+	clientId  int64
+	commandId int
 }
 
 //
@@ -56,7 +61,34 @@ func MakeClerk(ctrlers []*labrpc.ClientEnd, make_end func(string) *labrpc.Client
 	ck.sm = shardctrler.MakeClerk(ctrlers)
 	ck.make_end = make_end
 	// You'll have to add code here.
+	ck.clientId = nrand()
+	ck.commandId = 0
 	return ck
+}
+
+func (ck *Clerk) makeGetArgs(key string) GetArgs {
+	args := GetArgs{
+		Key:       key,
+		ClientId:  ck.clientId,
+		CommandId: ck.commandId,
+	}
+	ck.commandId++
+	return args
+}
+
+func (ck *Clerk) makePutAppendArgs(key string, value string, op string) PutAppendArgs {
+	if op != "Put" && op != "Append" {
+		log.Fatalf("Clerk: op in PutAppend %v", op)
+	}
+	args:= PutAppendArgs{
+		Key:       key,
+		Value:     value,
+		Op:        op,
+		ClientId:  ck.clientId,
+		CommandId: ck.commandId,
+	}
+	ck.commandId++
+	return args
 }
 
 //
@@ -66,8 +98,9 @@ func MakeClerk(ctrlers []*labrpc.ClientEnd, make_end func(string) *labrpc.Client
 // You will have to modify this function.
 //
 func (ck *Clerk) Get(key string) string {
-	args := GetArgs{}
-	args.Key = key
+	args := ck.makeGetArgs(key)
+	DPrintf("Clerk [%v]: send request Get(key %v) with commandId %d to replica group",
+		args.ClientId, args.Key, args.CommandId)
 
 	for {
 		shard := key2shard(key)
@@ -100,11 +133,9 @@ func (ck *Clerk) Get(key string) string {
 // You will have to modify this function.
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
-	args := PutAppendArgs{}
-	args.Key = key
-	args.Value = value
-	args.Op = op
-
+	args := ck.makePutAppendArgs(key, value, op)
+	DPrintf("Clerk [%v]: send request %v(key %v, value %v) with commandId %d to replica group",
+		args.ClientId, args.Op, args.Key, args.Value, args.CommandId)
 
 	for {
 		shard := key2shard(key)
