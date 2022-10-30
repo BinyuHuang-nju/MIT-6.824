@@ -49,6 +49,17 @@ type GetReply struct {
 	Value string
 }
 
+type MigrateDataArgs struct {
+	ConfigNum int
+	ShardNum  int
+}
+
+type MigrateDataReply struct {
+	Err 	  Err
+	KvDB	  map[string]string
+	LastOpr	  map[int64]ApplyRecord
+}
+
 const Debug = false
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {

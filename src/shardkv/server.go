@@ -1,17 +1,35 @@
 package shardkv
 
 
-import "6.824/labrpc"
+import (
+	"6.824/labrpc"
+	"6.824/shardctrler"
+	"sync/atomic"
+)
 import "6.824/raft"
 import "sync"
 import "6.824/labgob"
 
-
+const (
+	OpGet = "Get"
+	OpPut = "Put"
+	OpAppend = "Append"
+)
 
 type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+}
+
+type NotifyMsg struct {
+	Error Err
+	Value string
+}
+
+type ApplyRecord struct {
+	CommandId int
+	Error     Err
 }
 
 type ShardKV struct {
@@ -25,6 +43,16 @@ type ShardKV struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
+	dead         int32
+	curConfig    shardctrler.Config
+	lastConfig	 shardctrler.Config
+
+	lastApplied	 int
+	maxSeenTerm	 int
+
+	notifyChs    map[int]chan NotifyMsg    // raft index in log -> notify channel
+	kvDB		 [shardctrler.NShards]map[string]string  // shard -> kv db
+	lastOprs     [shardctrler.NShards]map[int64]int  // shard -> clientId -> seqId
 }
 
 
@@ -43,10 +71,15 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 // turn off debug output from this instance.
 //
 func (kv *ShardKV) Kill() {
+	atomic.StoreInt32(&kv.dead, 1)
 	kv.rf.Kill()
 	// Your code here, if desired.
 }
 
+func (kv *ShardKV) killed() bool {
+	z := atomic.LoadInt32(&kv.dead)
+	return z == 1
+}
 
 //
 // servers[] contains the ports of the servers in this group.

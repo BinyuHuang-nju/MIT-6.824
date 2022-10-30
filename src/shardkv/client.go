@@ -59,10 +59,16 @@ type Clerk struct {
 func MakeClerk(ctrlers []*labrpc.ClientEnd, make_end func(string) *labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.sm = shardctrler.MakeClerk(ctrlers)
+	ck.config = shardctrler.Config{
+		Num:    0,
+		Shards: [shardctrler.NShards]int{},
+		Groups: nil,
+	}
 	ck.make_end = make_end
 	// You'll have to add code here.
 	ck.clientId = nrand()
 	ck.commandId = 0
+	ck.config = ck.sm.Query(-1)
 	return ck
 }
 
