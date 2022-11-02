@@ -20,6 +20,8 @@ const (
 	OpAppend = "Append"
 	REQUEST_TIMEOUT = time.Duration(time.Millisecond * 500)
 	APPLY_INTERVAL = 5 * time.Millisecond
+	PULL_CONFIG_INTERVAL = 100 * time.Millisecond
+	PULL_SHARD_INTERVAL = 100 * time.Millisecond
 )
 
 type OpType uint8
@@ -157,7 +159,7 @@ func (kv *ShardKV) readSnapshotPersist(data []byte) {
 		d.Decode(&db) != nil ||
 		d.Decode(&lo) != nil ||
 		d.Decode(&st) != nil {
-		log.Fatalf("Server [%d]: read snapshot in shardkv fail.", kv.me)
+		log.Fatalf("{Node %d}{Group %d}: read snapshot in shardkv fail.", kv.me, kv.gid)
 	} else {
 		kv.lastApplied = la
 		kv.curConfig = cc
@@ -166,7 +168,7 @@ func (kv *ShardKV) readSnapshotPersist(data []byte) {
 		kv.kvDB = db
 		kv.lastOprs = lo
 		kv.dbStatus = st
-		DPrintf("Server [%d]: read snapshot in shardkv succeed.", kv.me)
+		DPrintf("{Node %d}{Group %d}: read snapshot in shardkv succeed.", kv.me, kv.gid)
 	}
 }
 
@@ -238,7 +240,7 @@ func (kv *ShardKV) getNotifyCh(index int) (chan NotifyMsg, bool) {
 	// TODO: if need to add lock
 	ch, ok := kv.notifyChs[index]
 	if !ok {
-		DPrintf("Server [%d]: applier wants to get NotifyCh[%d] but it not exists. \n", kv.me)
+		DPrintf("{Node %d}{Group %d}: applier wants to get NotifyCh[%d] but it not exists. \n", kv.me, kv.gid, index)
 	}
 	return ch, ok
 }
@@ -355,6 +357,84 @@ func (kv *ShardKV) killed() bool {
 	return z == 1
 }
 
+func (kv *ShardKV) applyOperation(op Op) NotifyMsg {
+	not := NotifyMsg{}
+	if kv.isDuplicated(op.Opr, op.ClientId, op.CommandId) {
+		// request out-of-date, just reply
+		DPrintf("{Node %d}{Group %d}: receive duplicated operation from applyCh with clientId %v and commandId %d, but last id is %v \n",
+			kv.gid, kv.me, op.ClientId, op.CommandId, kv.lastOprs[op.ClientId])
+		not.Error = kv.lastOprs[op.ClientId].Error
+	} else {
+		shardId := key2shard(op.Key)
+		if kv.canServe(shardId) {
+			// update state machine
+			err, val := kv.applyLogToDatabase(op, shardId)
+			not.Error, not.Value = err, val
+			// when op is Put or Append, we need to update lastOperation ever seen of this clientId
+			if op.Opr != OpGet {
+				ar := ApplyRecord{
+					CommandId: op.CommandId,
+					Error:     err,
+				}
+				kv.lastOprs[op.ClientId] = ar
+			}
+		} else {
+			not.Error = ErrWrongGroup
+		}
+	}
+	return not
+}
+
+func (kv *ShardKV) updateShardStatus(nextConfig shardctrler.Config) {
+	if nextConfig.Num == 1 {
+		// the initial config, we do not need to pull db from other groups
+		return
+	}
+	curOwnShards, nextOwnShards := [shardctrler.NShards]bool{}, [shardctrler.NShards]bool{}
+	for i := 0; i < shardctrler.NShards; i++ {
+		curOwnShards[i], nextOwnShards[i] = false, false
+	}
+
+	for shardId, gid := range kv.curConfig.Shards {
+		if gid == kv.gid {
+			curOwnShards[shardId] = true
+		}
+	}
+	for shardId, gid := range nextConfig.Shards {
+		if gid == kv.gid {
+			nextOwnShards[shardId] = true
+		}
+	}
+
+	for i := 0; i < shardctrler.NShards; i++ {
+		if curOwnShards[i] != nextOwnShards[i] {
+			if curOwnShards[i] == true {
+				kv.dbStatus[i] = BePulling
+			} else {
+				kv.dbStatus[i] = Pulling
+			}
+		}
+	}
+}
+
+func (kv *ShardKV) applyConfiguration(nextConfig shardctrler.Config) {
+	// locked in applier
+	if nextConfig.Num == kv.curConfig.Num + 1 {
+		for _, status := range kv.dbStatus {
+			if status != Serving {
+				fmt.Printf("{Node %d}{Group %d}: shard status %v not all Serving when apply config %v. \n",
+					kv.me, kv.gid, kv.dbStatus, nextConfig)
+				return
+			}
+		}
+		DPrintf("{Node %d}{Group %d}: apply config from %v to %v \n",
+			kv.me, kv.gid, kv.curConfig, nextConfig)
+		kv.updateShardStatus(nextConfig)
+		kv.lastConfig = kv.curConfig
+		kv.curConfig = nextConfig.Copy()
+	}
+}
+
 // TODO: when msg.CommandValid, there are four types of apply message
 func (kv *ShardKV) applier() {
 	for !kv.killed() {
@@ -363,7 +443,7 @@ func (kv *ShardKV) applier() {
 			if msg.CommandValid {
 				kv.mu.Lock()
 				if msg.CommandIndex <= kv.lastApplied {
-					fmt.Printf("Server [%d]: msg.CommandIndex %d <= kv.lastApplied %d. \n", kv.me,
+					fmt.Printf("{Node %d}{Group %d}: msg.CommandIndex %d <= kv.lastApplied %d. \n", kv.me, kv.gid,
 						msg.CommandIndex, kv.lastApplied)
 					kv.mu.Unlock()
 					continue
@@ -375,25 +455,112 @@ func (kv *ShardKV) applier() {
 					// we should not consider this command
 					term := msg.CommandTerm
 					if kv.maxSeenTerm >= term {
-						fmt.Printf("Server [%d]: msg.commandTerm %d <= kv.maxSeenTerm %d. \n", kv.me,
-							msg.CommandTerm, kv.maxSeenTerm)
+						fmt.Printf("{Node %d}{Group %d}: msg.commandTerm %d <= kv.maxSeenTerm %d. \n", kv.me,
+							kv.gid, msg.CommandTerm, kv.maxSeenTerm)
 					}
 					kv.maxSeenTerm = term
 					kv.mu.Unlock()
 					continue
 				case Op:
+					op := msg.Command.(Op)
+					not := kv.applyOperation(op)
+					// inform channel the result
+					if not.Error == ErrWrongGroup {
+						if ch, ok := kv.getNotifyCh(msg.CommandIndex); ok {
+							ch <- not
+						}
+					} else if currentTerm, isLeader := kv.rf.GetState(); isLeader && currentTerm == msg.CommandTerm {
+						// is case that a peer has changed its state,
+						// the request of CommandIndex in Start it refers may convert to another request
+						if ch, ok := kv.getNotifyCh(msg.CommandIndex); ok {
+							ch <- not
+						}
+					} else {
+						// to let corresponding channel not wait too long, return ErrWrongLeader
+						if ch, ok := kv.getNotifyCh(msg.CommandIndex); ok {
+							not.Error = ErrWrongLeader
+							ch <- not
+						}
+					}
+				case Configuration:
+					cf := msg.Command.(Configuration)
+					nextConfig := cf.Config
+					kv.applyConfiguration(nextConfig)
+				case PullShards:
+					ps := msg.Command.(PullShards)
+					// TODO: pull shard apply
 				default:
 					// TODO: other types of message
 				}
-				// TODO
+				// check if service needs to take snapshot, then persist snapshot
+				if kv.needSnapshot() {
+					kv.takeSnapshot()
+				}
 				kv.mu.Unlock()
-			} else if msg.SnapshotValid {
-
+			} else if msg.SnapshotValid { // from leader's InstallSnapshot
+				kv.mu.Lock()
+				if kv.lastApplied > msg.SnapshotIndex || kv.maxSeenTerm > msg.SnapshotTerm {
+					log.Fatalf("{Node %d}{Group %d}: SnapshotValid, but kv.lastApplied %d > msg.SnapshotIndex %d \n",
+						kv.me, kv.gid, kv.lastApplied, msg.SnapshotIndex)
+				}
+				// check if raft accepts snapshot, then persist
+				if kv.rf.CondInstallSnapshot(msg.SnapshotTerm, msg.SnapshotIndex, msg.Snapshot) {
+					kv.lastApplied = msg.SnapshotIndex
+					kv.maxSeenTerm = msg.SnapshotTerm
+					kv.readSnapshotPersist(msg.Snapshot) // will modify variables including lastApplied
+					if kv.lastApplied != msg.SnapshotIndex {
+						fmt.Printf("{Node %d}{Group %d}: SnapshotValid, but kv.lastApplied %d != msg.SnapshotIndex %d\n",
+							kv.me, kv.gid, kv.lastApplied, msg.SnapshotIndex)
+					}
+				}
+				kv.mu.Unlock()
 			} else {
 				log.Fatal("unknown ApplyMsg type.")
 			}
 		}
 		time.Sleep(APPLY_INTERVAL)
+	}
+}
+
+func (kv *ShardKV) processConfRequest(nextConfig shardctrler.Config) {
+	conf := Configuration{Config: nextConfig.Copy()}
+	kv.rf.Start(conf)
+}
+
+func (kv *ShardKV) pullNewConfiguration() {
+	for !kv.killed() {
+		if _, isLeader := kv.rf.GetState(); isLeader {
+			canPerformNextConfig := true
+			kv.mu.Lock()
+			for _, status := range kv.dbStatus {
+				if status != Serving {
+					DPrintf("{Node %d}{Group %d}: cannot pull new config since there exists some shard whose status is not Serving %v \n",
+						kv.me, kv.gid, kv.dbStatus)
+					canPerformNextConfig = false
+					break
+				}
+			}
+			currentConfigNum := kv.curConfig.Num
+			kv.mu.Unlock()
+			if canPerformNextConfig {
+				nextConfig := kv.scc.Query(currentConfigNum + 1)
+				if nextConfig.Num == currentConfigNum + 1 {
+					DPrintf("{Node %d}{Group %d}: pull new config %v, while current config %v \n",
+						kv.me, kv.gid, nextConfig, kv.curConfig)
+					kv.processConfRequest(nextConfig)
+				}
+			}
+		}
+		time.Sleep(PULL_CONFIG_INTERVAL)
+	}
+}
+
+func (kv *ShardKV) pullShards() {
+	for !kv.killed() {
+		if _, isLeader := kv.rf.GetState(); isLeader {
+			// TODO
+		}
+		time.Sleep(PULL_SHARD_INTERVAL)
 	}
 }
 
@@ -429,6 +596,10 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(Op{})
+	labgob.Register(Configuration{})
+	labgob.Register(PullShards{})
+	labgob.Register(CleanShards{})
+	labgob.Register(shardctrler.Config{})
 
 	kv := new(ShardKV)
 	kv.me = me
@@ -478,6 +649,9 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv.readSnapshotPersist(kv.rf.GetPersister().ReadSnapshot())
 
 	// TODO: add go routine
+	go kv.applier()  // raft log applier
+
+	go kv.pullNewConfiguration() // pull configuration from shardctrler
 
 	return kv
 }

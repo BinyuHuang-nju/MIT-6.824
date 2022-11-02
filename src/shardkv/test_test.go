@@ -25,14 +25,16 @@ func check(t *testing.T, ck *Clerk, key string, value string) {
 //
 func TestStaticShards(t *testing.T) {
 	fmt.Printf("Test: static shards ...\n")
-
+	fmt.Println("1")
 	cfg := make_config(t, 3, false, -1)
 	defer cfg.cleanup()
 
 	ck := cfg.makeClient()
+	fmt.Println("2")
 
 	cfg.join(0)
 	cfg.join(1)
+	fmt.Println("3")
 
 	n := 10
 	ka := make([]string, n)
@@ -42,15 +44,18 @@ func TestStaticShards(t *testing.T) {
 		va[i] = randstring(20)
 		ck.Put(ka[i], va[i])
 	}
+	fmt.Println("3.1")
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
 	}
+	fmt.Println("4")
 
 	// make sure that the data really is sharded by
 	// shutting down one shard and checking that some
 	// Get()s don't succeed.
 	cfg.ShutdownGroup(1)
 	cfg.checklogs() // forbid snapshots
+	fmt.Println("5")
 
 	ch := make(chan string)
 	for xi := 0; xi < n; xi++ {
@@ -64,6 +69,7 @@ func TestStaticShards(t *testing.T) {
 			}
 		}(xi)
 	}
+	fmt.Println("6")
 
 	// wait a bit, only about half the Gets should succeed.
 	ndone := 0
@@ -80,6 +86,7 @@ func TestStaticShards(t *testing.T) {
 			break
 		}
 	}
+	fmt.Println("7")
 
 	if ndone != 5 {
 		t.Fatalf("expected 5 completions with one shard dead; got %v\n", ndone)

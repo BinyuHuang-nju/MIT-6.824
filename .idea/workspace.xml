@@ -8,6 +8,7 @@
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/shardkv/common.go" beforeDir="false" afterPath="$PROJECT_DIR$/src/shardkv/common.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/shardkv/server.go" beforeDir="false" afterPath="$PROJECT_DIR$/src/shardkv/server.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/shardkv/test_test.go" beforeDir="false" afterPath="$PROJECT_DIR$/src/shardkv/test_test.go" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -55,7 +56,7 @@
     <property name="last_opened_file_path" value="$PROJECT_DIR$/../../VLDB-2021-labs" />
     <property name="settings.editor.selected.configurable" value="com.goide.configuration.GoLibrariesConfigurableProvider" />
   </component>
-  <component name="RunManager" selected="Go Test.TestReElection2A in 6.824/raft">
+  <component name="RunManager" selected="Go Test.TestStaticShards in 6.824/shardkv">
     <configuration name="TestBasic in 6.824/shardctrler" type="GoTestRunConfiguration" factoryName="Go Test" temporary="true" nameIsGenerated="true">
       <module name="6.824" />
       <working_directory value="$PROJECT_DIR$/src/shardctrler" />
@@ -100,24 +101,24 @@
       <pattern value="^\QTestSnapshotRecover3B\E$" />
       <method v="2" />
     </configuration>
-    <configuration name="TestSnapshotUnreliableRecoverConcurrentPartition3B in 6.824/kvraft" type="GoTestRunConfiguration" factoryName="Go Test" temporary="true" nameIsGenerated="true">
+    <configuration name="TestStaticShards in 6.824/shardkv" type="GoTestRunConfiguration" factoryName="Go Test" temporary="true" nameIsGenerated="true">
       <module name="6.824" />
-      <working_directory value="$PROJECT_DIR$/src/kvraft" />
+      <working_directory value="$PROJECT_DIR$/src/shardkv" />
       <framework value="gotest" />
       <kind value="PACKAGE" />
-      <package value="6.824/kvraft" />
+      <package value="6.824/shardkv" />
       <directory value="$PROJECT_DIR$" />
       <filePath value="$PROJECT_DIR$" />
-      <pattern value="^\QTestSnapshotUnreliableRecoverConcurrentPartition3B\E$" />
+      <pattern value="^\QTestStaticShards\E$" />
       <method v="2" />
     </configuration>
     <recent_temporary>
       <list>
+        <item itemvalue="Go Test.TestStaticShards in 6.824/shardkv" />
         <item itemvalue="Go Test.TestReElection2A in 6.824/raft" />
         <item itemvalue="Go Test.TestSnapshotRecover3B in 6.824/kvraft (1)" />
         <item itemvalue="Go Test.TestBasic in 6.824/shardctrler" />
         <item itemvalue="Go Test.TestSnapshotRecover3B in 6.824/kvraft" />
-        <item itemvalue="Go Test.TestSnapshotUnreliableRecoverConcurrentPartition3B in 6.824/kvraft" />
       </list>
     </recent_temporary>
   </component>

@@ -1,6 +1,8 @@
 package shardkv
 
-import "log"
+import (
+	"log"
+)
 
 //
 // Sharded key/value server.
@@ -62,7 +64,7 @@ type MigrateDataReply struct {
 	LastOpr	  map[int64]ApplyRecord
 }
 
-const Debug = false
+const Debug = true
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug {
