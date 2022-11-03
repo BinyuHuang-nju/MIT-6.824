@@ -22,6 +22,7 @@ const (
 	APPLY_INTERVAL = 5 * time.Millisecond
 	PULL_CONFIG_INTERVAL = 100 * time.Millisecond
 	PULL_SHARD_INTERVAL = 100 * time.Millisecond
+	CLEAN_SHARD_INTERVAL = 100 * time.Millisecond
 )
 
 type OpType uint8
@@ -430,8 +431,37 @@ func (kv *ShardKV) applyConfiguration(nextConfig shardctrler.Config) {
 		DPrintf("{Node %d}{Group %d}: apply config from %v to %v \n",
 			kv.me, kv.gid, kv.curConfig, nextConfig)
 		kv.updateShardStatus(nextConfig)
-		kv.lastConfig = kv.curConfig
+		kv.lastConfig = kv.curConfig.Copy()
 		kv.curConfig = nextConfig.Copy()
+	}
+}
+
+func (kv *ShardKV) applyPullShards(ps PullShards) {
+	// locked in applier
+	if ps.ConfigNum == kv.curConfig.Num {
+		var shardIds []int
+		for shardId, shardDb := range ps.Shards {
+			shardIds = append(shardIds, shardId)
+			if kv.dbStatus[shardId] == Pulling {
+				for key, val := range shardDb {
+					kv.kvDB[shardId][key] = val
+				}
+				kv.dbStatus[shardId] = GCing
+			} else {
+				continue
+			}
+		}
+		for clientId, ar := range ps.LastOperations {
+			lastOp, ok := kv.lastOprs[clientId]
+			if !ok || lastOp.CommandId < ar.CommandId {
+				kv.lastOprs[clientId] = ar
+			}
+		}
+		DPrintf("{Node %d}{Group %d}: apply pull shards with shardId %v. \n",
+			kv.me, kv.gid, shardIds)
+	} else {
+		DPrintf("{Node %d}{Group %d}: apply pull shards while current config num %d not equals to applied num %d \n",
+			kv.me, kv.gid, kv.curConfig.Num, ps.ConfigNum)
 	}
 }
 
@@ -488,7 +518,10 @@ func (kv *ShardKV) applier() {
 					kv.applyConfiguration(nextConfig)
 				case PullShards:
 					ps := msg.Command.(PullShards)
-					// TODO: pull shard apply
+					kv.applyPullShards(ps)
+				case CleanShards:
+					// cs := msg.Command.(CleanShards)
+
 				default:
 					// TODO: other types of message
 				}
@@ -555,12 +588,146 @@ func (kv *ShardKV) pullNewConfiguration() {
 	}
 }
 
+func (kv *ShardKV) getShardIdByStatus(status ShardStatus) map[int][]int {
+	gid2shardIds := make(map[int][]int)
+	// locked in pullShards
+	for shardId, st := range kv.dbStatus {
+		if st == status {
+			// find shardId belongs to which group in lastConfig
+			gid := kv.lastConfig.Shards[shardId]
+			if _, ok := gid2shardIds[gid]; ok {
+				gid2shardIds[gid] = append(gid2shardIds[gid], shardId)
+			} else {
+				gid2shardIds[gid] = append([]int{}, shardId)
+			}
+		}
+	}
+	return gid2shardIds
+}
+
+func (kv *ShardKV) PullShardsReceiver(args *MigrateDataArgs, reply *MigrateDataReply) {
+	if _, isLeader := kv.rf.GetState(); !isLeader {
+		reply.Err = ErrWrongLeader
+		return
+	}
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+
+	if kv.curConfig.Num < args.ConfigNum {
+		reply.Err, reply.ConfigNum = ErrNotReady, kv.curConfig.Num
+		return
+	} else if kv.curConfig.Num > args.ConfigNum {
+		fmt.Printf("{Node %d}{Group %d}: called PushShards while my config num %d is bigger than caller's config num %d",
+			kv.me, kv.gid, kv.curConfig.Num, args.ConfigNum)
+	}
+
+	shardsDB := make(map[int]map[string]string)
+	for _, shardId := range args.ShardIds {
+		if kv.dbStatus[shardId] == Pulling {
+			fmt.Printf("{Node %d}{Group %d}: called PushShards while dbStatus %v and pull shards %v",
+				kv.me, kv.gid, kv.dbStatus, args.ShardIds)
+		}
+		shardsDB[shardId] = dbDeepCopy(kv.kvDB[shardId])
+	}
+	reply.KvDB = shardsDB
+
+	lastOp := make(map[int64]ApplyRecord)
+	for clientId, ar := range lastOp {
+		lastOp[clientId] = ar
+	}
+	reply.LastOpr = lastOp
+
+	reply.Err, reply.ConfigNum = OK, args.ConfigNum
+}
+
+func (kv *ShardKV) processPullShardsRequest(reply MigrateDataReply) {
+	var ps PullShards
+	ps.ConfigNum = reply.ConfigNum
+	ps.Shards = make(map[int]map[string]string)
+	for shardId, _ := range reply.KvDB {
+		ps.Shards[shardId] = dbDeepCopy(reply.KvDB[shardId])
+	}
+	ps.LastOperations = make(map[int64]ApplyRecord)
+	for clientId, ar := range reply.LastOpr {
+		ps.LastOperations[clientId] = ar
+	}
+
+	kv.rf.Start(ps)
+}
+
 func (kv *ShardKV) pullShards() {
 	for !kv.killed() {
 		if _, isLeader := kv.rf.GetState(); isLeader {
-			// TODO
+			kv.mu.Lock()
+			DPrintf("{Node %d}{Group %d}: [pullShards] current shard status is %v. \n", kv.me, kv.gid, kv.dbStatus)
+			gid2shardIds := kv.getShardIdByStatus(Pulling)
+			var wg sync.WaitGroup
+			for gid, shardIds := range gid2shardIds {
+				DPrintf("{Node %d}{Group %d}: try to pull shards %v from {group %d}. \n",
+					kv.me, kv.gid, shardIds, gid)
+				wg.Add(1)
+				go func(servers []string, configNum int, shardIds []int) {
+					defer wg.Done()
+					pullShardsArgs := MigrateDataArgs{
+						ConfigNum: configNum,
+						ShardIds:  shardIds,
+					}
+					for _, server := range servers {
+						var pullShardsReply MigrateDataReply
+						srv := kv.make_end(server)
+						ok := srv.Call("ShardKV.PullShardsReceiver", &pullShardsArgs, &pullShardsReply)
+						if ok && pullShardsReply.Err == OK {
+							kv.processPullShardsRequest(pullShardsReply)
+						}
+					}
+				}(kv.lastConfig.Groups[gid], kv.curConfig.Num, shardIds)
+			}
+			kv.mu.Unlock()
+			wg.Wait()
 		}
 		time.Sleep(PULL_SHARD_INTERVAL)
+	}
+}
+
+func (kv *ShardKV) CleanShardsReceiver(args *CleanShardArgs, reply *CleanShardReply) {
+
+}
+
+func (kv *ShardKV) processCleanShardsRequest(reply CleanShardReply) {
+
+}
+
+func (kv *ShardKV) cleanShards() {
+	for !kv.killed() {
+		if _, isLeader := kv.rf.GetState(); isLeader {
+			kv.mu.Lock()
+			DPrintf("{Node %d}{Group %d}: [cleanShards] current shard status is %v. \n", kv.me, kv.gid, kv.dbStatus)
+			gid2shardIds := kv.getShardIdByStatus(GCing)
+			var wg sync.WaitGroup
+			for gid, shardIds := range gid2shardIds {
+				DPrintf("{Node %d}{Group %d}: try to clean shards %v with {group %d}. \n",
+					kv.me, kv.gid, shardIds, gid)
+				wg.Add(1)
+				go func(servers []string, configNum int, shardIds []int) {
+					defer wg.Done()
+					cleanShardsArgs := CleanShardArgs{
+						ConfigNum: configNum,
+						ShardIds:  shardIds,
+					}
+					for _, server := range servers {
+						var cleanShardsReply CleanShardReply
+						srv := kv.make_end(server)
+						ok := srv.Call("ShardKV.CleanShardsReceiver", &cleanShardsArgs, &cleanShardsReply)
+						if ok && cleanShardsReply.Err == OK {
+							kv.processCleanShardsRequest(cleanShardsReply)
+						}
+					}
+				}(kv.lastConfig.Groups[gid], kv.curConfig.Num, shardIds)
+			}
+			kv.mu.Unlock()
+			wg.Wait()
+		}
+		time.Sleep(CLEAN_SHARD_INTERVAL)
 	}
 }
 
@@ -600,6 +767,8 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	labgob.Register(PullShards{})
 	labgob.Register(CleanShards{})
 	labgob.Register(shardctrler.Config{})
+	labgob.Register(MigrateDataArgs{})
+	labgob.Register(MigrateDataReply{})
 
 	kv := new(ShardKV)
 	kv.me = me
@@ -652,6 +821,10 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	go kv.applier()  // raft log applier
 
 	go kv.pullNewConfiguration() // pull configuration from shardctrler
+
+	go kv.pullShards()  // pull shards from other groups after confirming config
+
+	go kv.cleanShards() // clean shards between two groups after pulling shards
 
 	return kv
 }

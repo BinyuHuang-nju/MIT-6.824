@@ -55,13 +55,32 @@ type GetReply struct {
 
 type MigrateDataArgs struct {
 	ConfigNum int
-	ShardNum  int
+	ShardIds  []int
 }
 
 type MigrateDataReply struct {
 	Err 	  Err
-	KvDB	  map[string]string
+	ConfigNum int
+	KvDB	  map[int]map[string]string // gid -> shard database
 	LastOpr	  map[int64]ApplyRecord
+}
+
+type CleanShardArgs struct {
+	ConfigNum int
+	ShardIds  []int
+}
+
+type CleanShardReply struct {
+	Err       Err
+	ConfigNum int
+}
+
+func dbDeepCopy(db map[string]string) map[string]string {
+	res := make(map[string]string)
+	for k, v := range db {
+		res[k] = v
+	}
+	return res
 }
 
 const Debug = true
