@@ -1,0 +1,786 @@
+
+<!DOCTYPE html>
+<html>
+  <head><title>Porcupine</title>
+    <style>
+html {
+  font-family: Helvetica, Arial, sans-serif;
+  font-size: 16px;
+}
+
+text {
+  dominant-baseline: middle;
+}
+
+#legend {
+  position: fixed;
+  left: 10px;
+  top: 10px;
+  background-color: rgba(255, 255, 255, 0.5);
+  backdrop-filter: blur(3px);
+  padding: 5px 2px 1px 2px;
+  border-radius: 4px;
+}
+
+#canvas {
+  margin-top: 45px;
+}
+
+#calc {
+  width: 0;
+  height: 0;
+  visibility: hidden;
+}
+
+.bg {
+  fill: transparent;
+}
+
+.divider {
+  stroke: #ccc;
+  stroke-width: 1;
+}
+
+.history-rect {
+  stroke: #888;
+  stroke-width: 1;
+  fill: #42d1f5;
+}
+
+.link {
+  fill: #206475;
+  cursor: pointer;
+}
+
+.selected {
+  stroke-width: 5;
+}
+
+.target-rect {
+  opacity: 0;
+}
+
+.history-text {
+  font-size: 0.9rem;
+  font-family: Menlo, Courier New, monospace;
+}
+
+.hidden {
+  opacity: 0.2;
+}
+
+.hidden line {
+  opacity: 0.5; /* note: this is multiplicative */
+}
+
+.linearization {
+  stroke: rgba(0, 0, 0, 0.5);
+}
+
+.linearization-invalid {
+  stroke: rgba(255, 0, 0, 0.5);
+}
+
+.linearization-point {
+  stroke-width: 5;
+}
+
+.linearization-line {
+  stroke-width: 2;
+}
+
+.tooltip {
+  position: absolute;
+  opacity: 0;
+  border: 1px solid #ccc;
+  background: white;
+  border-radius: 4px;
+  padding: 5px;
+  font-size: 0.8rem;
+}
+
+.inactive {
+  display: none;
+}
+    </style>
+  </head>
+  <body>
+    <div id="legend">
+      <svg xmlns="http://www.w3.org/2000/svg" width="660" height="20">
+        <text x="0" y="10">Clients</text>
+        <line x1="50" y1="0" x2="70" y2="20" stroke="#000" stroke-width="1"></line>
+        <text x="70" y="10">Time</text>
+        <line x1="110" y1="10" x2="200" y2="10" stroke="#000" stroke-width="2"></line>
+        <polygon points="200,5 200,15, 210,10" fill="#000"></polygon>
+        <rect x="300" y="5" width="10" height="10" fill="rgba(0, 0, 0, 0.5)"></rect>
+        <text x="315" y="10">Valid LP</text>
+        <rect x="400" y="5" width="10" height="10" fill="rgba(255, 0, 0, 0.5)"></rect>
+        <text x="415" y="10">Invalid LP</text>
+        <text x="520" y="10" id="jump-link" class="link">[ jump to first error ]</text>
+      </svg>
+    </div>
+    <div id="canvas">
+    </div>
+    <div id="calc">
+    </div>
+    <script>
+      'use strict'
+
+      const SVG_NS = 'http://www.w3.org/2000/svg'
+
+      function svgnew(tag, attrs) {
+        const el = document.createElementNS(SVG_NS, tag)
+        svgattr(el, attrs)
+        return el
+      }
+
+      function svgattr(el, attrs) {
+        if (attrs != null) {
+          for (var k in attrs) {
+            if (Object.prototype.hasOwnProperty.call(attrs, k)) {
+              el.setAttributeNS(null, k, attrs[k])
+            }
+          }
+        }
+      }
+
+      function svgattach(parent, child) {
+        return parent.appendChild(child)
+      }
+
+      function svgadd(el, tag, attrs) {
+        return svgattach(el, svgnew(tag, attrs))
+      }
+
+      function newArray(n, fn) {
+        const arr = new Array(n)
+        for (let i = 0; i < n; i++) {
+          arr[i] = fn(i)
+        }
+        return arr
+      }
+
+      function arrayEq(a, b) {
+        if (a === b) {
+          return true
+        }
+        if (a == null || b == null) {
+          return false
+        }
+        if (a.length != b.length) {
+          return false
+        }
+        for (let i = 0; i < a.length; i++) {
+          if (a[i] !== b[i]) {
+            return false
+          }
+        }
+        return true
+      }
+
+      function render(data) {
+        const PADDING = 10
+        const BOX_HEIGHT = 30
+        const BOX_SPACE = 15
+        const XOFF = 20
+        const EPSILON = 20
+        const LINE_BLEED = 5
+        const BOX_GAP = 20
+        const BOX_TEXT_PADDING = 10
+        const HISTORY_RECT_RADIUS = 4
+
+        let maxClient = -1
+        data.forEach(partition => {
+          partition['History'].forEach(el => {
+            maxClient = Math.max(maxClient, el['ClientId'])
+          })
+        })
+        const nClient = maxClient + 1
+
+        // Prepare some useful data to be used later:
+        // - Add a GID to each event
+        // - Create a mapping from GIDs back to events
+        // - Create a set of all timestamps
+        // - Create a set of all start timestamps
+        const allTimestamps = new Set()
+        const startTimestamps = new Set()
+        let gid = 0
+        const byGid = {}
+        data.forEach(partition => {
+          partition['History'].forEach(el => {
+            allTimestamps.add(el['Start'])
+            startTimestamps.add(el['Start'])
+            allTimestamps.add(el['End'])
+            // give elements GIDs
+            el['Gid'] = gid
+            byGid[gid] = el
+            gid++
+          })
+        })
+        let sortedTimestamps = Array.from(allTimestamps).sort((a, b) => a - b)
+
+        // This should not happen with "real" histories, but for certain edge
+        // cases, we need to deal with having multiple events share a start/end
+        // time. We solve this by tweaking the events that share the end time,
+        // updating the time to end+epsilon. In practice, rather than having to
+        // choose an epsilon, we choose to average the value with the next largest
+        // timestamp.
+        const nextTs = {}
+        for (let i = 0; i < sortedTimestamps.length-1; i++) {
+          nextTs[sortedTimestamps[i]] = sortedTimestamps[i+1]
+        }
+        data.forEach(partition => {
+          partition['History'].forEach(el => {
+            let end = el['End']
+            el['OriginalEnd'] = end // for display purposes
+            if (startTimestamps.has(end)) {
+              if (Object.prototype.hasOwnProperty.call(nextTs, end)) {
+                const tweaked = (end + nextTs[end])/2
+                el['End'] = tweaked
+                allTimestamps.add(tweaked)
+              }
+            }
+          })
+        })
+        // Update sortedTimestamps, because we created some new timestamps.
+        sortedTimestamps = Array.from(allTimestamps).sort((a, b) => a - b)
+
+        // Compute layout.
+        //
+        // We warp time to make it easier to see what's going on. We can think
+        // of there being a monotonically increasing mapping from timestamps to
+        // x-positions. This mapping should satisfy some criteria to make the
+        // visualization interpretable:
+        //
+        // - distinguishability: there should be some minimum distance between
+        // unequal timestamps
+        // - visible text: history boxes should be wide enough to fit the text
+        // they contain
+        // - enough space for LPs: history boxes should be wide enough to fit
+        // all linearization points that go through them, while maintaining
+        // readability of linearizations (where each LP in a sequence is spaced
+        // some minimum distance away from the previous one)
+        //
+        // Originally, I thought about this as a linear program:
+        //
+        // - variables for every unique timestamp, x_i = warp(timestamp_i)
+        // - objective: minimize sum x_i
+        // - constraint: non-negative
+        // - constraint: ordering + distinguishability, timestamp_i < timestamp_j -> x_i + EPS < x_j
+        // - constraint: visible text, size_text_j < x_{timestamp_j_end} - x_{timestamp_j_start}
+        // - constraint: linearization lines have points that fit within box, ...
+        //
+        // This used to actually be implemented using an LP solver (without the
+        // linearization point part, though that should be doable too), but
+        // then I realized it's possible to solve optimally using a greedy
+        // left-to-right scan in linear time.
+        //
+        // So that is what we do here. We optimally solve the above, and while
+        // doing so, also compute some useful information (e.g. x-positions of
+        // linearization points) that is useful later.
+        const xPos = {}
+        // Compute some information about history elements, sorted by end time;
+        // the most important information here is box width.
+        const byEnd = data.flatMap(partition =>
+          partition['History'].map(el => {
+            // compute width of the text inside the history element by actually
+            // drawing it (in a hidden div)
+            const scratch = document.getElementById('calc')
+            scratch.innerHTML = ''
+            const svg = svgadd(scratch, 'svg')
+            const text = svgadd(svg, 'text', {
+              'text-anchor': 'middle',
+              'class': 'history-text',
+            })
+            text.textContent = el['Description']
+            const bbox = text.getBBox()
+            const width = bbox.width + 2*BOX_TEXT_PADDING
+            return {
+              'start': el['Start'],
+              'end': el['End'],
+              'width': width,
+              'gid': el['Gid']
+            }
+          })
+        ).sort((a, b) => a.end - b.end)
+        // Some preprocessing for linearization points and illegal next
+        // linearizations. We need to figure out where exactly LPs end up
+        // as we go, so we can make sure event boxes are wide enough.
+        const eventToLinearizations = newArray(gid, () => []) // event -> [{index, position}]
+        const eventIllegalLast = newArray(gid, () => []) // event -> [index]
+        const allLinearizations = []
+        let lgid = 0
+        data.forEach(partition => {
+          partition['PartialLinearizations'].forEach(lin => {
+            const globalized = [] // linearization with global indexes instead of partition-local ones
+            const included = new Set() // for figuring out illegal next LPs
+            lin.forEach((id, position) => {
+              included.add(id['Index'])
+              const gid = partition['History'][id['Index']]['Gid']
+              globalized.push(gid)
+              eventToLinearizations[gid].push({'index': lgid, 'position': position})
+            })
+            allLinearizations.push(globalized)
+            let minEnd = Infinity
+            partition['History'].forEach((el, index) => {
+              if (!included.has(index)) {
+                minEnd = Math.min(minEnd, el['End'])
+              }
+            })
+            partition['History'].forEach((el, index) => {
+              if (!included.has(index) && el['Start'] < minEnd) {
+                eventIllegalLast[el['Gid']].push(lgid)
+              }
+            })
+            lgid++
+          })
+        })
+        const linearizationPositions = newArray(lgid, () => []) // [[xpos]]
+        // Okay, now we're ready to do the left-to-right scan.
+        // Solve timestamp -> xPos.
+        let eventIndex = 0
+        xPos[sortedTimestamps[0]] = 0 // positions start at 0
+        for (let i = 1; i < sortedTimestamps.length; i++) {
+          // left-to-right scan, finding minimum time we can use
+          const ts = sortedTimestamps[i]
+          // ensure some gap from last timestamp
+          let pos = xPos[sortedTimestamps[i-1]] + BOX_GAP
+          // ensure that text fits in boxes
+          while (eventIndex < byEnd.length && byEnd[eventIndex].end <= ts) {
+            // push our position as far as necessary to accommodate text in box
+            const event = byEnd[eventIndex]
+            const textEndPos = xPos[event.start] + event.width
+            pos = Math.max(pos, textEndPos)
+            // Ensure that LPs fit in box.
+            //
+            // When placing the end of an event, for all partial linearizations
+            // that include that event, for the prefix that comes before that event,
+            // all their start points must have been placed already, so we can figure
+            // out the minimum width that the box needs to be to accommodate the LP.
+            eventToLinearizations[event.gid]
+              .concat(eventIllegalLast[event.gid].map(index => {
+                return {
+                  'index': index,
+                  'position': allLinearizations[index].length-1,
+                }
+              }))
+              .forEach(li => {
+                const {index, position} = li
+                for (let i = linearizationPositions[index].length; i <= position; i++) {
+                  // determine past points
+                  let prev = null
+                  if (linearizationPositions[index].length != 0) {
+                    prev = linearizationPositions[index][i-1]
+                  }
+                  const nextGid = allLinearizations[index][i]
+                  let nextPos
+                  if (prev === null) {
+                    nextPos = xPos[byGid[nextGid]['Start']]
+                  } else {
+                    nextPos = Math.max(xPos[byGid[nextGid]['Start']], prev + EPSILON)
+                  }
+                  linearizationPositions[index].push(nextPos)
+                }
+                // this next line only really makes sense for the ones in
+                // eventToLinearizations, not the ones from eventIllegalLast,
+                // but it's safe to do it for all points, so we don't bother to
+                // distinguish.
+                pos = Math.max(pos, linearizationPositions[index][position])
+              })
+            // ensure that illegal next LPs fit in box too
+            eventIllegalLast[event.gid].forEach(li => {
+              const lin = linearizationPositions[li]
+              const prev = lin[lin.length-1]
+              pos = Math.max(pos, prev + EPSILON)
+            })
+
+            eventIndex++
+          }
+          xPos[ts] = pos
+        }
+
+        // Solved, now draw UI.
+
+        let selected = false
+        let selectedIndex = [-1, -1]
+
+        const height = 2*PADDING + BOX_HEIGHT * nClient + BOX_SPACE * (nClient - 1)
+        const width = 2*PADDING + XOFF + xPos[sortedTimestamps[sortedTimestamps.length-1]]
+        const svg = svgadd(document.getElementById('canvas'), 'svg', {
+          'width': width,
+          'height': height,
+        })
+
+        // draw background, etc.
+        const bg = svgadd(svg, 'g')
+        const bgRect = svgadd(bg, 'rect', {
+          'height': height,
+          'width': width,
+          'x': 0,
+          'y': 0,
+          'class': 'bg',
+        })
+        bgRect.onclick = handleBgClick
+        for (let i = 0; i < nClient; i++) {
+          const text = svgadd(bg, 'text', {
+            'x': XOFF/2,
+            'y': PADDING + BOX_HEIGHT/2 + i * (BOX_HEIGHT + BOX_SPACE),
+            'text-anchor': 'middle',
+          })
+          text.textContent = i
+        }
+        svgadd(bg, 'line', {
+          'x1': PADDING + XOFF,
+          'y1': PADDING,
+          'x2': PADDING + XOFF,
+          'y2': height - PADDING,
+          'class': 'divider'
+        })
+
+        // draw history
+        const historyLayers = []
+        const historyRects = []
+        const targetRects = svgnew('g')
+        data.forEach((partition, partitionIndex) => {
+          const l = svgadd(svg, 'g')
+          historyLayers.push(l)
+          const rects = []
+          partition['History'].forEach((el, elIndex) => {
+            const g = svgadd(l, 'g')
+            const rx = xPos[el['Start']]
+            const width = xPos[el['End']] - rx
+            const x = rx + XOFF + PADDING
+            const y = PADDING + el['ClientId'] * (BOX_HEIGHT + BOX_SPACE)
+            rects.push(svgadd(g, 'rect', {
+              'height': BOX_HEIGHT,
+              'width': width,
+              'x': x,
+              'y': y,
+              'rx': HISTORY_RECT_RADIUS,
+              'ry': HISTORY_RECT_RADIUS,
+              'class': 'history-rect'
+            }))
+            const text = svgadd(g, 'text', {
+              'x': x + width/2,
+              'y': y + BOX_HEIGHT/2,
+              'text-anchor': 'middle',
+              'class': 'history-text',
+            })
+            text.textContent = el['Description']
+            // we don't add mouseTarget to g, but to targetRects, because we
+            // want to layer this on top of everything at the end; otherwise, the
+            // LPs and lines will be over the target, which will create holes
+            // where hover etc. won't work
+            const mouseTarget = svgadd(targetRects, 'rect', {
+              'height': BOX_HEIGHT,
+              'width': width,
+              'x': x,
+              'y': y,
+              'class': 'target-rect',
+              'data-partition': partitionIndex,
+              'data-index': elIndex,
+            })
+            mouseTarget.onmouseover = handleMouseOver
+            mouseTarget.onmousemove = handleMouseMove
+            mouseTarget.onmouseout = handleMouseOut
+            mouseTarget.onclick = handleClick
+          })
+          historyRects.push(rects)
+        })
+
+        // draw partial linearizations
+        const illegalLast = data.map(partition => {
+          return partition['PartialLinearizations'].map(() => new Set())
+        })
+        const largestIllegal = data.map(() => {return {}})
+        const largestIllegalLength = data.map(() => {return {}})
+        const partialLayers = []
+        const errorPoints = []
+        data.forEach((partition, partitionIndex) => {
+          const l = []
+          partialLayers.push(l)
+          partition['PartialLinearizations'].forEach((lin, linIndex) => {
+            const g = svgadd(svg, 'g')
+            l.push(g)
+            let prevX = null
+            let prevY = null
+            let prevEl = null
+            const included = new Set()
+            lin.forEach(id => {
+              const el = partition['History'][id['Index']]
+              const hereX = PADDING + XOFF + xPos[el['Start']]
+              const x = prevX !== null ? Math.max(hereX, prevX + EPSILON) : hereX
+              const y = PADDING + el['ClientId'] * (BOX_HEIGHT + BOX_SPACE) - LINE_BLEED
+              // line from previous
+              if (prevEl !== null) {
+                svgadd(g, 'line', {
+                  'x1': prevX,
+                  'x2': x,
+                  'y1': prevEl['ClientId'] >= el['ClientId'] ? prevY : prevY + BOX_HEIGHT + 2*LINE_BLEED,
+                  'y2': prevEl['ClientId'] <= el['ClientId'] ? y : y + BOX_HEIGHT + 2*LINE_BLEED,
+                  'class': 'linearization linearization-line',
+                })
+              }
+              // current line
+              svgadd(g, 'line', {
+                'x1': x,
+                'x2': x,
+                'y1': y,
+                'y2': y + BOX_HEIGHT + 2*LINE_BLEED,
+                'class': 'linearization linearization-point'
+              })
+              prevX = x
+              prevY = y
+              prevEl = el
+              included.add(id['Index'])
+            })
+            // show possible but illegal next linearizations
+            // a history element is a possible next try
+            // if no other history element must be linearized earlier
+            // i.e. forall others, this.start < other.end
+            let minEnd = Infinity
+            partition['History'].forEach((el, index) => {
+              if (!included.has(index)) {
+                minEnd = Math.min(minEnd, el['End'])
+              }
+            })
+            partition['History'].forEach((el, index) => {
+              if (!included.has(index) && el['Start'] < minEnd) {
+                const hereX = PADDING + XOFF + xPos[el['Start']]
+                const x = prevX !== null ? Math.max(hereX, prevX + EPSILON) : hereX
+                const y = PADDING + el['ClientId'] * (BOX_HEIGHT + BOX_SPACE) - LINE_BLEED
+                // line from previous
+                svgadd(g, 'line', {
+                  'x1': prevX,
+                  'x2': x,
+                  'y1': prevEl['ClientId'] >= el['ClientId'] ? prevY : prevY + BOX_HEIGHT + 2*LINE_BLEED,
+                  'y2': prevEl['ClientId'] <= el['ClientId'] ? y : y + BOX_HEIGHT + 2*LINE_BLEED,
+                  'class': 'linearization-invalid linearization-line',
+                })
+                // current line
+                const point = svgadd(g, 'line', {
+                  'x1': x,
+                  'x2': x,
+                  'y1': y,
+                  'y2': y + BOX_HEIGHT + 2*LINE_BLEED,
+                  'class': 'linearization-invalid linearization-point',
+                })
+                errorPoints.push({
+                  x: x,
+                  partition: partitionIndex,
+                  index: lin[lin.length-1]['Index'], // NOTE not index
+                  element: point
+                })
+                illegalLast[partitionIndex][linIndex].add(index)
+                if (!Object.prototype.hasOwnProperty.call(largestIllegalLength[partitionIndex], index) || largestIllegalLength[partitionIndex][index] < lin.length) {
+                  largestIllegalLength[partitionIndex][index] = lin.length
+                  largestIllegal[partitionIndex][index] = linIndex
+                }
+              }
+            })
+          })
+        })
+        errorPoints.sort((a, b) => a.x - b.x)
+
+        // attach targetRects
+        svgattach(svg, targetRects)
+
+        // tooltip
+        const tooltip = document.getElementById('canvas').appendChild(document.createElement('div'))
+        tooltip.setAttribute('class', 'tooltip')
+
+        function handleMouseOver() {
+          if (!selected) {
+            const partition = parseInt(this.dataset['partition'])
+            const index = parseInt(this.dataset['index'])
+            highlight(partition, index)
+          }
+          tooltip.style.opacity = 1
+        }
+
+        function linearizationIndex(partition, index) {
+          // show this linearization
+          if (Object.prototype.hasOwnProperty.call(data[partition]['Largest'], index)) {
+            return data[partition]['Largest'][index]
+          } else if (Object.prototype.hasOwnProperty.call(largestIllegal[partition], index)) {
+            return largestIllegal[partition][index]
+          }
+          return null
+        }
+
+        function highlight(partition, index) {
+          // hide all but this partition
+          historyLayers.forEach((layer, i) => {
+            if (i === partition) {
+              layer.classList.remove('hidden')
+            } else {
+              layer.classList.add('hidden')
+            }
+          })
+          // hide all but the relevant linearization
+          partialLayers.forEach(layer => {
+            layer.forEach(g => {
+              g.classList.add('hidden')
+            })
+          })
+          // show this linearization
+          const maxIndex = linearizationIndex(partition, index)
+          if (maxIndex !== null) {
+            partialLayers[partition][maxIndex].classList.remove('hidden')
+          }
+          updateJump()
+        }
+
+        let lastTooltip = [null, null, null, null, null]
+        function handleMouseMove() {
+          const partition = parseInt(this.dataset['partition'])
+          const index = parseInt(this.dataset['index'])
+          const [sPartition, sIndex] = selectedIndex
+          const thisTooltip = [partition, index, selected, sPartition, sIndex]
+
+          if (!arrayEq(lastTooltip, thisTooltip)) {
+            let maxIndex
+            if (!selected) {
+              maxIndex = linearizationIndex(partition, index)
+            } else {
+              // if selected, show info relevant to the selected linearization
+              maxIndex = linearizationIndex(sPartition, sIndex)
+            }
+            if (selected && sPartition !== partition) {
+              tooltip.innerHTML = 'Not part of selected partition.'
+            } else if (maxIndex === null) {
+              if (!selected) {
+                tooltip.innerHTML = 'Not part of any partial linearization.'
+              } else {
+                tooltip.innerHTML = 'Selected element is not part of any partial linearization.'
+              }
+            } else {
+              const lin = data[partition]['PartialLinearizations'][maxIndex]
+              let prev = null, curr = null
+              let found = false
+              for (let i = 0; i < lin.length; i++) {
+                prev = curr
+                curr = lin[i]
+                if (curr['Index'] === index) {
+                  found = true
+                  break
+                }
+              }
+              let call = data[partition]['History'][index]['Start']
+              let ret = data[partition]['History'][index]['OriginalEnd']
+              let msg = ''
+              if (found) {
+                // part of linearization
+                if (prev !== null) {
+                  msg = '<strong>Previous state:</strong><br>' + prev['StateDescription'] + '<br><br>'
+                }
+                msg += '<strong>New state:</strong><br>' + curr['StateDescription'] +
+                  '<br><br>Call: ' + call +
+                  '<br><br>Return: ' + ret
+              } else if (illegalLast[partition][maxIndex].has(index)) {
+                // illegal next one
+                msg = '<strong>Previous state:</strong><br>' + lin[lin.length-1]['StateDescription'] +
+                  '<br><br><strong>New state:</strong><br>&langle;invalid op&rangle;' +
+                  '<br><br>Call: ' + call +
+                  '<br><br>Return: ' + ret
+              } else {
+                // not part of this one
+                msg = 'Not part of selected element\'s partial linearization.'
+              }
+              tooltip.innerHTML = msg
+            }
+            lastTooltip = thisTooltip
+          }
+          tooltip.style.left = (event.pageX+20) + 'px'
+          tooltip.style.top = (event.pageY+20) + 'px'
+        }
+
+        function handleMouseOut() {
+          if (!selected) {
+            resetHighlight()
+          }
+          tooltip.style.opacity = 0
+          lastTooltip = [null, null, null, null, null]
+        }
+
+        function resetHighlight() {
+          // show all layers
+          historyLayers.forEach(layer => {
+            layer.classList.remove('hidden')
+          })
+          // show longest linearizations, which are first
+          partialLayers.forEach(layers => {
+            layers.forEach((l, i) => {
+              if (i === 0) {
+                l.classList.remove('hidden')
+              } else {
+                l.classList.add('hidden')
+              }
+            })
+          })
+          updateJump()
+        }
+
+        function updateJump() {
+          const jump = document.getElementById('jump-link')
+          // find first non-hidden point
+          // feels a little hacky, but it works
+          const point = errorPoints.find(pt => !pt.element.parentElement.classList.contains('hidden'))
+          if (point) {
+            jump.classList.remove('inactive')
+            jump.onclick = () => {
+              point.element.scrollIntoView({behavior: 'smooth', inline: 'center', block: 'center'})
+              if (!selected) {
+                select(point.partition, point.index)
+              }
+            }
+          } else {
+            jump.classList.add('inactive')
+          }
+        }
+
+        function handleClick() {
+          const partition = parseInt(this.dataset['partition'])
+          const index = parseInt(this.dataset['index'])
+          if (selected) {
+            const [sPartition, sIndex] = selectedIndex
+            if (partition === sPartition && index === sIndex) {
+              deselect()
+              return
+            } else {
+              historyRects[sPartition][sIndex].classList.remove('selected')
+            }
+          }
+          select(partition, index)
+        }
+
+        function handleBgClick() {
+          deselect()
+        }
+
+        function select(partition, index) {
+          selected = true
+          selectedIndex = [partition, index]
+          highlight(partition, index)
+          historyRects[partition][index].classList.add('selected')
+        }
+
+        function deselect() {
+          if (!selected) {
+            return
+          }
+          selected = false
+          resetHighlight()
+          const [partition, index] = selectedIndex
+          historyRects[partition][index].classList.remove('selected')
+        }
+
+        handleMouseOut() // initialize, same as mouse out
+      }
+
+      const data = [{"History":[{"ClientId":0,"Start":736887300,"End":1025408700,"Description":"put('0', 'qVYjw')"},{"ClientId":3,"Start":3316364800,"End":3409110500,"Description":"append('0', '0-c8H')"},{"ClientId":0,"Start":3577852400,"End":3648801000,"Description":"append('0', 'pnVR8')"},{"ClientId":1,"Start":3392963400,"End":3690427100,"Description":"append('0', 'A5xRR')"},{"ClientId":6,"Start":4163676000,"End":4479239700,"Description":"append('0', 'UxFCm')"},{"ClientId":3,"Start":4386059600,"End":4495272100,"Description":"get('0') -\u003e 'qVYjw0-c8HA5xRRpnVR8UxFCm'"},{"ClientId":4,"Start":4409270500,"End":4500936100,"Description":"get('0') -\u003e 'qVYjw0-c8HA5xRRpnVR8UxFCm'"},{"ClientId":0,"Start":4689188100,"End":4824154900,"Description":"get('0') -\u003e 'qVYjw0-c8HA5xRRpnVR8UxFCm'"},{"ClientId":0,"Start":4824154900,"End":4901831000,"Description":"get('0') -\u003e 'qVYjw0-c8HA5xRRpnVR8UxFCm'"},{"ClientId":2,"Start":5107475700,"End":5505325400,"Description":"get('0') -\u003e 'qVYjw0-c8HA5xRRpnVR8UxFCm'"},{"ClientId":9,"Start":7079924700,"End":7174556700,"Description":"append('0', '3Q9uG')"},{"ClientId":6,"Start":7415058900,"End":7517823600,"Description":"append('0', 'mv7A1')"},{"ClientId":8,"Start":7539847600,"End":7680778100,"Description":"append('0', 'BRXeY')"},{"ClientId":4,"Start":7640041600,"End":7763821000,"Description":"put('0', 'yOPYm')"},{"ClientId":9,"Start":7769925300,"End":7846612100,"Description":"get('0') -\u003e 'yOPYm'"},{"ClientId":4,"Start":7763821000,"End":7852632000,"Description":"append('0', 'ucIZo')"}],"PartialLinearizations":[[{"Index":0,"StateDescription":"qVYjw"},{"Index":1,"StateDescription":"qVYjw0-c8H"},{"Index":3,"StateDescription":"qVYjw0-c8HA5xRR"},{"Index":2,"StateDescription":"qVYjw0-c8HA5xRRpnVR8"},{"Index":4,"StateDescription":"qVYjw0-c8HA5xRRpnVR8UxFCm"},{"Index":5,"StateDescription":"qVYjw0-c8HA5xRRpnVR8UxFCm"},{"Index":6,"StateDescription":"qVYjw0-c8HA5xRRpnVR8UxFCm"},{"Index":7,"StateDescription":"qVYjw0-c8HA5xRRpnVR8UxFCm"},{"Index":8,"StateDescription":"qVYjw0-c8HA5xRRpnVR8UxFCm"},{"Index":9,"StateDescription":"qVYjw0-c8HA5xRRpnVR8UxFCm"},{"Index":10,"StateDescription":"qVYjw0-c8HA5xRRpnVR8UxFCm3Q9uG"},{"Index":11,"StateDescription":"qVYjw0-c8HA5xRRpnVR8UxFCm3Q9uGmv7A1"},{"Index":12,"StateDescription":"qVYjw0-c8HA5xRRpnVR8UxFCm3Q9uGmv7A1BRXeY"},{"Index":13,"StateDescription":"yOPYm"},{"Index":14,"StateDescription":"yOPYm"},{"Index":15,"StateDescription":"yOPYmucIZo"}]],"Largest":{"0":0,"1":0,"10":0,"11":0,"12":0,"13":0,"14":0,"15":0,"2":0,"3":0,"4":0,"5":0,"6":0,"7":0,"8":0,"9":0}},{"History":[{"ClientId":0,"Start":1025408700,"End":1128463800,"Description":"put('1', 'M5l72')"},{"ClientId":1,"Start":3207296500,"End":3291168300,"Description":"append('1', '6eVsz')"},{"ClientId":3,"Start":3642746300,"End":3723893600,"Description":"get('1') -\u003e 'M5l726eVsz'"},{"ClientId":2,"Start":3461813700,"End":3972194300,"Description":"get('1') -\u003e 'M5l726eVsz'"},{"ClientId":2,"Start":3972194300,"End":4067987900,"Description":"get('1') -\u003e 'M5l726eVsz'"},{"ClientId":5,"Start":4109223100,"End":4169994300,"Description":"append('1', 'XcqO1')"},{"ClientId":9,"Start":4633543800,"End":4818816500,"Description":"append('1', 'nAPER')"},{"ClientId":0,"Start":5102199300,"End":5679735000,"Description":"get('1') -\u003e 'M5l726eVszXcqO1nAPER'"},{"ClientId":6,"Start":5685752000,"End":5827397300,"Description":"get('1') -\u003e 'M5l726eVszXcqO1nAPER'"},{"ClientId":8,"Start":5428758100,"End":6426472200,"Description":"get('1') -\u003e 'M5l726eVszXcqO1nAPER'"},{"ClientId":8,"Start":6468274700,"End":6571163500,"Description":"append('1', 'GMpEB')"},{"ClientId":0,"Start":6633617300,"End":7353908000,"Description":"get('1') -\u003e 'M5l726eVszXcqO1nAPERGMpEB'"},{"ClientId":6,"Start":7297571700,"End":7415058900,"Description":"append('1', 'C5veb')"},{"ClientId":5,"Start":7494000000,"End":7599642400,"Description":"append('1', 'oSetY')"},{"ClientId":3,"Start":7467051200,"End":7605602300,"Description":"append('1', 'oBt19')"},{"ClientId":1,"Start":8053779400,"End":8177404100,"Description":"append('1', '4_Aty')"},{"ClientId":4,"Start":7852632000,"End":8258777900,"Description":"get('1') -\u003e 'M5l726eVszXcqO1nAPERGMpEBC5veboSetYoBt194_Aty'"}],"PartialLinearizations":[[{"Index":0,"StateDescription":"M5l72"},{"Index":1,"StateDescription":"M5l726eVsz"},{"Index":3,"StateDescription":"M5l726eVsz"},{"Index":2,"StateDescription":"M5l726eVsz"},{"Index":4,"StateDescription":"M5l726eVsz"},{"Index":5,"StateDescription":"M5l726eVszXcqO1"},{"Index":6,"StateDescription":"M5l726eVszXcqO1nAPER"},{"Index":7,"StateDescription":"M5l726eVszXcqO1nAPER"},{"Index":9,"StateDescription":"M5l726eVszXcqO1nAPER"},{"Index":8,"StateDescription":"M5l726eVszXcqO1nAPER"},{"Index":10,"StateDescription":"M5l726eVszXcqO1nAPERGMpEB"},{"Index":11,"StateDescription":"M5l726eVszXcqO1nAPERGMpEB"},{"Index":12,"StateDescription":"M5l726eVszXcqO1nAPERGMpEBC5veb"},{"Index":13,"StateDescription":"M5l726eVszXcqO1nAPERGMpEBC5veboSetY"},{"Index":14,"StateDescription":"M5l726eVszXcqO1nAPERGMpEBC5veboSetYoBt19"},{"Index":15,"StateDescription":"M5l726eVszXcqO1nAPERGMpEBC5veboSetYoBt194_Aty"},{"Index":16,"StateDescription":"M5l726eVszXcqO1nAPERGMpEBC5veboSetYoBt194_Aty"}]],"Largest":{"0":0,"1":0,"10":0,"11":0,"12":0,"13":0,"14":0,"15":0,"16":0,"2":0,"3":0,"4":0,"5":0,"6":0,"7":0,"8":0,"9":0}},{"History":[{"ClientId":0,"Start":1128463800,"End":1231167600,"Description":"put('2', 'F5T-2')"},{"ClientId":3,"Start":3723893600,"End":4020421300,"Description":"append('2', '6qFmP')"},{"ClientId":1,"Start":4014440200,"End":4103224700,"Description":"append('2', 'ONOTJ')"},{"ClientId":2,"Start":4067987900,"End":4158343600,"Description":"append('2', 'a-IM1')"},{"ClientId":8,"Start":4432400400,"End":4736505500,"Description":"append('2', 'emyAj')"},{"ClientId":3,"Start":4599302400,"End":4912539500,"Description":"get('2') -\u003e 'F5T-26qFmPONOTJa-IM1emyAj'"},{"ClientId":5,"Start":4906849400,"End":4990270900,"Description":"put('2', 'W0YUh')"},{"ClientId":7,"Start":5086710900,"End":5317586700,"Description":"get('2') -\u003e 'W0YUh'"},{"ClientId":3,"Start":5728985800,"End":5832610700,"Description":"get('2') -\u003e 'W0YUh'"},{"ClientId":7,"Start":7565182000,"End":7646006900,"Description":"append('2', 'iuCc0')"},{"ClientId":1,"Start":8177404100,"End":8279187300,"Description":"append('2', 'pu8my')"}],"PartialLinearizations":[[{"Index":0,"StateDescription":"F5T-2"},{"Index":1,"StateDescription":"F5T-26qFmP"},{"Index":2,"StateDescription":"F5T-26qFmPONOTJ"},{"Index":3,"StateDescription":"F5T-26qFmPONOTJa-IM1"},{"Index":4,"StateDescription":"F5T-26qFmPONOTJa-IM1emyAj"},{"Index":5,"StateDescription":"F5T-26qFmPONOTJa-IM1emyAj"},{"Index":6,"StateDescription":"W0YUh"},{"Index":7,"StateDescription":"W0YUh"},{"Index":8,"StateDescription":"W0YUh"},{"Index":9,"StateDescription":"W0YUhiuCc0"},{"Index":10,"StateDescription":"W0YUhiuCc0pu8my"}]],"Largest":{"0":0,"1":0,"10":0,"2":0,"3":0,"4":0,"5":0,"6":0,"7":0,"8":0,"9":0}},{"History":[{"ClientId":0,"Start":1231167600,"End":1518704000,"Description":"put('3', 'XC_CT')"},{"ClientId":1,"Start":3144860500,"End":3207296500,"Description":"get('3') -\u003e 'XC_CT'"},{"ClientId":4,"Start":3398661300,"End":3455466500,"Description":"append('3', 'RR_qw')"},{"ClientId":5,"Start":4004080600,"End":4109223100,"Description":"get('3') -\u003e 'XC_CTRR_qw'"},{"ClientId":4,"Start":4158343600,"End":4261649000,"Description":"get('3') -\u003e 'XC_CTRR_qw'"},{"ClientId":8,"Start":4349941100,"End":4432400400,"Description":"get('3') -\u003e 'XC_CTRR_qw'"},{"ClientId":3,"Start":4495272100,"End":4599302400,"Description":"append('3', 'g928j')"},{"ClientId":7,"Start":4984793300,"End":5086710900,"Description":"get('3') -\u003e 'XC_CTRR_qwg928j'"},{"ClientId":5,"Start":4990270900,"End":5097123600,"Description":"get('3') -\u003e 'XC_CTRR_qwg928j'"},{"ClientId":6,"Start":5827397300,"End":7297571700,"Description":"append('3', 'K4c_z')"},{"ClientId":3,"Start":7394487600,"End":7467051200,"Description":"append('3', 'fuh3L')"},{"ClientId":2,"Start":6797847600,"End":7473653500,"Description":"get('3') -\u003e 'XC_CTRR_qwg928jK4c_zfuh3L'"},{"ClientId":7,"Start":5740611300,"End":7478708700,"Description":"append('3', 'Ad1V_')"},{"ClientId":4,"Start":5499007200,"End":7640041600,"Description":"get('3') -\u003e 'XC_CTRR_qwg928jK4c_zfuh3LAd1V_'"},{"ClientId":5,"Start":7599642400,"End":7721707300,"Description":"get('3') -\u003e 'XC_CTRR_qwg928jK4c_zfuh3LAd1V_'"},{"ClientId":3,"Start":7605602300,"End":7727382700,"Description":"append('3', 'zFoOy')"},{"ClientId":1,"Start":6638685200,"End":7733367000,"Description":"append('3', 'X9GyZ')"},{"ClientId":8,"Start":7775939200,"End":7873400900,"Description":"append('3', 'uDwpk')"},{"ClientId":5,"Start":7721707300,"End":8135896200,"Description":"get('3') -\u003e 'XC_CTRR_qwg928jK4c_zfuh3LAd1V_zFoOyX9GyZuDwpk'"},{"ClientId":3,"Start":7867345600,"End":8197773700,"Description":"get('3') -\u003e 'XC_CTRR_qwg928jK4c_zfuh3LAd1V_zFoOyX9GyZuDwpk'"}],"PartialLinearizations":[[{"Index":0,"StateDescription":"XC_CT"},{"Index":1,"StateDescription":"XC_CT"},{"Index":2,"StateDescription":"XC_CTRR_qw"},{"Index":3,"StateDescription":"XC_CTRR_qw"},{"Index":4,"StateDescription":"XC_CTRR_qw"},{"Index":5,"StateDescription":"XC_CTRR_qw"},{"Index":6,"StateDescription":"XC_CTRR_qwg928j"},{"Index":7,"StateDescription":"XC_CTRR_qwg928j"},{"Index":8,"StateDescription":"XC_CTRR_qwg928j"},{"Index":9,"StateDescription":"XC_CTRR_qwg928jK4c_z"},{"Index":10,"StateDescription":"XC_CTRR_qwg928jK4c_zfuh3L"},{"Index":11,"StateDescription":"XC_CTRR_qwg928jK4c_zfuh3L"},{"Index":12,"StateDescription":"XC_CTRR_qwg928jK4c_zfuh3LAd1V_"},{"Index":13,"StateDescription":"XC_CTRR_qwg928jK4c_zfuh3LAd1V_"},{"Index":14,"StateDescription":"XC_CTRR_qwg928jK4c_zfuh3LAd1V_"},{"Index":15,"StateDescription":"XC_CTRR_qwg928jK4c_zfuh3LAd1V_zFoOy"},{"Index":16,"StateDescription":"XC_CTRR_qwg928jK4c_zfuh3LAd1V_zFoOyX9GyZ"},{"Index":17,"StateDescription":"XC_CTRR_qwg928jK4c_zfuh3LAd1V_zFoOyX9GyZuDwpk"},{"Index":18,"StateDescription":"XC_CTRR_qwg928jK4c_zfuh3LAd1V_zFoOyX9GyZuDwpk"},{"Index":19,"StateDescription":"XC_CTRR_qwg928jK4c_zfuh3LAd1V_zFoOyX9GyZuDwpk"}]],"Largest":{"0":0,"1":0,"10":0,"11":0,"12":0,"13":0,"14":0,"15":0,"16":0,"17":0,"18":0,"19":0,"2":0,"3":0,"4":0,"5":0,"6":0,"7":0,"8":0,"9":0}},{"History":[{"ClientId":0,"Start":1518704000,"End":1847515000,"Description":"put('4', 'KhSMd')"},{"ClientId":0,"Start":3404083600,"End":3478416200,"Description":"get('4') -\u003e 'KhSMd'"},{"ClientId":3,"Start":3473134600,"End":3565550000,"Description":"get('4') -\u003e 'KhSMd'"},{"ClientId":0,"Start":3648801000,"End":3993302400,"Description":"get('4') -\u003e 'KhSMd'"},{"ClientId":7,"Start":3668019100,"End":3998711300,"Description":"get('4') -\u003e 'KhSMd'"},{"ClientId":4,"Start":3559851800,"End":4009392000,"Description":"get('4') -\u003e 'KhSMd'"},{"ClientId":3,"Start":4020421300,"End":4115210600,"Description":"append('4', 'p5wRr')"},{"ClientId":6,"Start":3579865500,"End":4163676000,"Description":"get('4') -\u003e 'KhSMd2_-pnp5wRr'"},{"ClientId":3,"Start":4115210600,"End":4176210000,"Description":"append('4', 'rIj-F')"},{"ClientId":0,"Start":3993302400,"End":4689188100,"Description":"append('4', '2_-pn')"},{"ClientId":4,"Start":4659650000,"End":4757103100,"Description":"get('4') -\u003e 'KhSMd2_-pnp5wRrrIj-F'"},{"ClientId":9,"Start":4818816500,"End":4901831000,"Description":"get('4') -\u003e 'KhSMd2_-pnp5wRrrIj-F'"},{"ClientId":0,"Start":5004926600,"End":5102199300,"Description":"get('4') -\u003e 'KhSMd2_-pnp5wRrrIj-F'"},{"ClientId":9,"Start":4901831000,"End":5333467000,"Description":"get('4') -\u003e 'KhSMd2_-pnp5wRrrIj-F'"},{"ClientId":5,"Start":5838663200,"End":6163118000,"Description":"append('4', 'dttAt')"},{"ClientId":0,"Start":5679735000,"End":6551116400,"Description":"get('4') -\u003e 'KhSMd2_-pnp5wRrrIj-FdttAt'"},{"ClientId":5,"Start":6163118000,"End":6562709300,"Description":"append('4', '2JS0I')"},{"ClientId":2,"Start":5505325400,"End":6568712200,"Description":"get('4') -\u003e 'KhSMd2_-pnp5wRrrIj-FdttAt2JS0I'"},{"ClientId":0,"Start":6551116400,"End":6633617300,"Description":"get('4') -\u003e 'KhSMd2_-pnp5wRrrIj-FdttAt2JS0I'"},{"ClientId":3,"Start":7302589300,"End":7394487600,"Description":"append('4', 'jhDui')"},{"ClientId":5,"Start":7168898000,"End":7494000000,"Description":"put('4', 'RpbCA')"},{"ClientId":7,"Start":7478708700,"End":7565182000,"Description":"append('4', 'tnXeN')"},{"ClientId":2,"Start":7473653500,"End":7970727000,"Description":"get('4') -\u003e 'RpbCAjhDuitnXeN'"}],"PartialLinearizations":[[{"Index":0,"StateDescription":"KhSMd"},{"Index":1,"StateDescription":"KhSMd"},{"Index":2,"StateDescription":"KhSMd"},{"Index":5,"StateDescription":"KhSMd"},{"Index":3,"StateDescription":"KhSMd"},{"Index":4,"StateDescription":"KhSMd"},{"Index":9,"StateDescription":"KhSMd2_-pn"},{"Index":6,"StateDescription":"KhSMd2_-pnp5wRr"},{"Index":7,"StateDescription":"KhSMd2_-pnp5wRr"},{"Index":8,"StateDescription":"KhSMd2_-pnp5wRrrIj-F"},{"Index":10,"StateDescription":"KhSMd2_-pnp5wRrrIj-F"},{"Index":11,"StateDescription":"KhSMd2_-pnp5wRrrIj-F"},{"Index":13,"StateDescription":"KhSMd2_-pnp5wRrrIj-F"},{"Index":12,"StateDescription":"KhSMd2_-pnp5wRrrIj-F"},{"Index":14,"StateDescription":"KhSMd2_-pnp5wRrrIj-FdttAt"},{"Index":15,"StateDescription":"KhSMd2_-pnp5wRrrIj-FdttAt"},{"Index":16,"StateDescription":"KhSMd2_-pnp5wRrrIj-FdttAt2JS0I"},{"Index":17,"StateDescription":"KhSMd2_-pnp5wRrrIj-FdttAt2JS0I"},{"Index":18,"StateDescription":"KhSMd2_-pnp5wRrrIj-FdttAt2JS0I"},{"Index":20,"StateDescription":"RpbCA"},{"Index":19,"StateDescription":"RpbCAjhDui"},{"Index":21,"StateDescription":"RpbCAjhDuitnXeN"},{"Index":22,"StateDescription":"RpbCAjhDuitnXeN"}]],"Largest":{"0":0,"1":0,"10":0,"11":0,"12":0,"13":0,"14":0,"15":0,"16":0,"17":0,"18":0,"19":0,"2":0,"20":0,"21":0,"22":0,"3":0,"4":0,"5":0,"6":0,"7":0,"8":0,"9":0}},{"History":[{"ClientId":0,"Start":1847515000,"End":1951291400,"Description":"put('5', 'cm6M5')"},{"ClientId":2,"Start":3296488000,"End":3398661300,"Description":"append('5', 'a3tau')"},{"ClientId":1,"Start":3690427100,"End":4014440200,"Description":"append('5', 'Vk01M')"},{"ClientId":9,"Start":3844655000,"End":4169994300,"Description":"get('5') -\u003e 'cm6M5a3tauVk01M'"},{"ClientId":8,"Start":3744945600,"End":4349941100,"Description":"get('5') -\u003e 'cm6M5a3tauVk01M'"},{"ClientId":4,"Start":4572027800,"End":4659650000,"Description":"get('5') -\u003e 'cm6M5a3tauVk01M'"},{"ClientId":3,"Start":4996030100,"End":5092088900,"Description":"append('5', 'hKNxr')"},{"ClientId":5,"Start":5097123600,"End":5169115400,"Description":"append('5', 'EFiIK')"},{"ClientId":7,"Start":5317586700,"End":5417139000,"Description":"put('5', '8E3wy')"},{"ClientId":4,"Start":5339889800,"End":5422458400,"Description":"append('5', 'vWc2k')"},{"ClientId":8,"Start":5323690300,"End":5428758100,"Description":"append('5', '3zD1A')"},{"ClientId":8,"Start":6426472200,"End":6468274700,"Description":"get('5') -\u003e '8E3wyvWc2k3zD1A'"},{"ClientId":2,"Start":6650150400,"End":6720825800,"Description":"get('5') -\u003e '8E3wyvWc2k3zD1A'"},{"ClientId":6,"Start":7517823600,"End":8203174800,"Description":"get('5') -\u003e '8E3wyvWc2k3zD1ARq-jQ'"},{"ClientId":7,"Start":7722695800,"End":8279187300,"Description":"get('5') -\u003e '8E3wyvWc2k3zD1ARq-jQ'"},{"ClientId":2,"Start":7970727000,"End":8300645100,"Description":"append('5', 'Rq-jQ')"}],"PartialLinearizations":[[{"Index":0,"StateDescription":"cm6M5"},{"Index":1,"StateDescription":"cm6M5a3tau"},{"Index":2,"StateDescription":"cm6M5a3tauVk01M"},{"Index":4,"StateDescription":"cm6M5a3tauVk01M"},{"Index":3,"StateDescription":"cm6M5a3tauVk01M"},{"Index":5,"StateDescription":"cm6M5a3tauVk01M"},{"Index":6,"StateDescription":"cm6M5a3tauVk01MhKNxr"},{"Index":7,"StateDescription":"cm6M5a3tauVk01MhKNxrEFiIK"},{"Index":8,"StateDescription":"8E3wy"},{"Index":9,"StateDescription":"8E3wyvWc2k"},{"Index":10,"StateDescription":"8E3wyvWc2k3zD1A"},{"Index":11,"StateDescription":"8E3wyvWc2k3zD1A"},{"Index":12,"StateDescription":"8E3wyvWc2k3zD1A"},{"Index":15,"StateDescription":"8E3wyvWc2k3zD1ARq-jQ"},{"Index":13,"StateDescription":"8E3wyvWc2k3zD1ARq-jQ"},{"Index":14,"StateDescription":"8E3wyvWc2k3zD1ARq-jQ"}]],"Largest":{"0":0,"1":0,"10":0,"11":0,"12":0,"13":0,"14":0,"15":0,"2":0,"3":0,"4":0,"5":0,"6":0,"7":0,"8":0,"9":0}},{"History":[{"ClientId":0,"Start":1951291400,"End":2033609900,"Description":"put('6', 'ZvcQb')"},{"ClientId":0,"Start":3062654100,"End":3404083600,"Description":"append('6', 'cOwYi')"},{"ClientId":3,"Start":3409110500,"End":3473134600,"Description":"get('6') -\u003e 'ZvcQbcOwYi'"},{"ClientId":5,"Start":3481085400,"End":4004080600,"Description":"append('6', 'CK3Vt')"},{"ClientId":2,"Start":4158343600,"End":4267380000,"Description":"append('6', '4ml8i')"},{"ClientId":6,"Start":4479239700,"End":4592949200,"Description":"get('6') -\u003e 'ZvcQbcOwYiCK3Vt4ml8i'"},{"ClientId":0,"Start":4901831000,"End":5004926600,"Description":"append('6', '09txn')"},{"ClientId":6,"Start":4592949200,"End":5113816200,"Description":"get('6') -\u003e 'ZvcQbcOwYiCK3Vt4ml8i09txn'"},{"ClientId":4,"Start":5422458400,"End":5499007200,"Description":"get('6') -\u003e 'ZvcQbcOwYiCK3Vt4ml8i09txn'"},{"ClientId":1,"Start":5514731200,"End":6557049700,"Description":"append('6', 'KBSUg')"},{"ClientId":1,"Start":6557049700,"End":6638685200,"Description":"append('6', '4sjhP')"},{"ClientId":9,"Start":5921105100,"End":6644079900,"Description":"append('6', 'du3ZE')"},{"ClientId":2,"Start":6568712200,"End":6650150400,"Description":"append('6', 'HAnKu')"},{"ClientId":8,"Start":6571163500,"End":6655503400,"Description":"get('6') -\u003e 'ZvcQbcOwYiCK3Vt4ml8i09txnKBSUg4sjhPdu3ZEHAnKu'"},{"ClientId":2,"Start":6720825800,"End":6797847600,"Description":"get('6') -\u003e 'ZvcQbcOwYiCK3Vt4ml8i09txnKBSUg4sjhPdu3ZEHAnKuQ_Yl5'"},{"ClientId":3,"Start":5832610700,"End":6803946900,"Description":"get('6') -\u003e 'ZvcQbcOwYiCK3Vt4ml8i09txnKBSUg4sjhPdu3ZEHAnKuQ_Yl5'"},{"ClientId":9,"Start":6644079900,"End":7079924700,"Description":"append('6', 'Q_Yl5')"},{"ClientId":7,"Start":7646006900,"End":7721707300,"Description":"append('6', 'YLrQx')"},{"ClientId":1,"Start":7733367000,"End":7825550000,"Description":"append('6', 'gEUDH')"},{"ClientId":8,"Start":7873400900,"End":7976071600,"Description":"get('6') -\u003e 'ZvcQbcOwYiCK3Vt4ml8i09txnKBSUg4sjhPdu3ZEHAnKuQ_Yl5YLrQxgEUDH'"},{"ClientId":1,"Start":7935280800,"End":7981406100,"Description":"append('6', 'abeKe')"},{"ClientId":8,"Start":7976071600,"End":8059764900,"Description":"append('6', 'xPU8l')"},{"ClientId":0,"Start":7421350600,"End":8197773700,"Description":"get('6') -\u003e 'ZvcQbcOwYiCK3Vt4ml8i09txnKBSUg4sjhPdu3ZEHAnKuQ_Yl5YLrQxgEUDHabeKexPU8l'"}],"PartialLinearizations":[[{"Index":0,"StateDescription":"ZvcQb"},{"Index":1,"StateDescription":"ZvcQbcOwYi"},{"Index":2,"StateDescription":"ZvcQbcOwYi"},{"Index":3,"StateDescription":"ZvcQbcOwYiCK3Vt"},{"Index":4,"StateDescription":"ZvcQbcOwYiCK3Vt4ml8i"},{"Index":5,"StateDescription":"ZvcQbcOwYiCK3Vt4ml8i"},{"Index":6,"StateDescription":"ZvcQbcOwYiCK3Vt4ml8i09txn"},{"Index":7,"StateDescription":"ZvcQbcOwYiCK3Vt4ml8i09txn"},{"Index":8,"StateDescription":"ZvcQbcOwYiCK3Vt4ml8i09txn"},{"Index":9,"StateDescription":"ZvcQbcOwYiCK3Vt4ml8i09txnKBSUg"},{"Index":10,"StateDescription":"ZvcQbcOwYiCK3Vt4ml8i09txnKBSUg4sjhP"},{"Index":11,"StateDescription":"ZvcQbcOwYiCK3Vt4ml8i09txnKBSUg4sjhPdu3ZE"},{"Index":12,"StateDescription":"ZvcQbcOwYiCK3Vt4ml8i09txnKBSUg4sjhPdu3ZEHAnKu"},{"Index":13,"StateDescription":"ZvcQbcOwYiCK3Vt4ml8i09txnKBSUg4sjhPdu3ZEHAnKu"},{"Index":16,"StateDescription":"ZvcQbcOwYiCK3Vt4ml8i09txnKBSUg4sjhPdu3ZEHAnKuQ_Yl5"},{"Index":15,"StateDescription":"ZvcQbcOwYiCK3Vt4ml8i09txnKBSUg4sjhPdu3ZEHAnKuQ_Yl5"},{"Index":14,"StateDescription":"ZvcQbcOwYiCK3Vt4ml8i09txnKBSUg4sjhPdu3ZEHAnKuQ_Yl5"},{"Index":17,"StateDescription":"ZvcQbcOwYiCK3Vt4ml8i09txnKBSUg4sjhPdu3ZEHAnKuQ_Yl5YLrQx"},{"Index":18,"StateDescription":"ZvcQbcOwYiCK3Vt4ml8i09txnKBSUg4sjhPdu3ZEHAnKuQ_Yl5YLrQxgEUDH"},{"Index":19,"StateDescription":"ZvcQbcOwYiCK3Vt4ml8i09txnKBSUg4sjhPdu3ZEHAnKuQ_Yl5YLrQxgEUDH"},{"Index":20,"StateDescription":"ZvcQbcOwYiCK3Vt4ml8i09txnKBSUg4sjhPdu3ZEHAnKuQ_Yl5YLrQxgEUDHabeKe"},{"Index":21,"StateDescription":"ZvcQbcOwYiCK3Vt4ml8i09txnKBSUg4sjhPdu3ZEHAnKuQ_Yl5YLrQxgEUDHabeKexPU8l"},{"Index":22,"StateDescription":"ZvcQbcOwYiCK3Vt4ml8i09txnKBSUg4sjhPdu3ZEHAnKuQ_Yl5YLrQxgEUDHabeKexPU8l"}]],"Largest":{"0":0,"1":0,"10":0,"11":0,"12":0,"13":0,"14":0,"15":0,"16":0,"17":0,"18":0,"19":0,"2":0,"20":0,"21":0,"22":0,"3":0,"4":0,"5":0,"6":0,"7":0,"8":0,"9":0}},{"History":[{"ClientId":0,"Start":2033609900,"End":2816999800,"Description":"put('7', '6jEJG')"},{"ClientId":2,"Start":3398661300,"End":3461813700,"Description":"append('7', 'NTs39')"},{"ClientId":4,"Start":4009392000,"End":4158343600,"Description":"append('7', '4h-Lq')"},{"ClientId":3,"Start":4176210000,"End":4386059600,"Description":"append('7', 'tfNzp')"},{"ClientId":2,"Start":4267380000,"End":5107475700,"Description":"put('7', 'rSLjY')"},{"ClientId":4,"Start":4835087600,"End":5113816200,"Description":"get('7') -\u003e 'rSLjY'"},{"ClientId":8,"Start":4736505500,"End":5323690300,"Description":"get('7') -\u003e 'rSLjY'"},{"ClientId":7,"Start":5417139000,"End":5662995000,"Description":"append('7', 'KrS9t')"},{"ClientId":9,"Start":5499007200,"End":5921105100,"Description":"get('7') -\u003e 'rSLjYKrS9t'"},{"ClientId":3,"Start":6803946900,"End":7302589300,"Description":"append('7', 's-SL5')"},{"ClientId":8,"Start":6655503400,"End":7538847000,"Description":"append('7', 'mU5mF')"},{"ClientId":3,"Start":7727382700,"End":7867345600,"Description":"get('7') -\u003e 'rSLjYKrS9ts-SL5mU5mF'"},{"ClientId":1,"Start":7981406100,"End":8053779400,"Description":"append('7', 'JwPIe')"}],"PartialLinearizations":[[{"Index":0,"StateDescription":"6jEJG"},{"Index":1,"StateDescription":"6jEJGNTs39"},{"Index":2,"StateDescription":"6jEJGNTs394h-Lq"},{"Index":3,"StateDescription":"6jEJGNTs394h-LqtfNzp"},{"Index":4,"StateDescription":"rSLjY"},{"Index":6,"StateDescription":"rSLjY"},{"Index":5,"StateDescription":"rSLjY"},{"Index":7,"StateDescription":"rSLjYKrS9t"},{"Index":8,"StateDescription":"rSLjYKrS9t"},{"Index":9,"StateDescription":"rSLjYKrS9ts-SL5"},{"Index":10,"StateDescription":"rSLjYKrS9ts-SL5mU5mF"},{"Index":11,"StateDescription":"rSLjYKrS9ts-SL5mU5mF"},{"Index":12,"StateDescription":"rSLjYKrS9ts-SL5mU5mFJwPIe"}]],"Largest":{"0":0,"1":0,"10":0,"11":0,"12":0,"2":0,"3":0,"4":0,"5":0,"6":0,"7":0,"8":0,"9":0}},{"History":[{"ClientId":0,"Start":2816999800,"End":2879467200,"Description":"put('8', 'hOuLE')"},{"ClientId":2,"Start":3228638500,"End":3296488000,"Description":"append('8', 'eSbo1')"},{"ClientId":3,"Start":3565550000,"End":3642746300,"Description":"get('8') -\u003e 'hOuLEeSbo1'"},{"ClientId":1,"Start":4103224700,"End":4163676000,"Description":"append('8', 'ogHU8')"},{"ClientId":5,"Start":4169994300,"End":4906849400,"Description":"get('8') -\u003e 'hOuLEeSbo18CoHBogHU8rOD7q'"},{"ClientId":7,"Start":3998711300,"End":4984793300,"Description":"append('8', '8CoHB')"},{"ClientId":3,"Start":4912539500,"End":4996030100,"Description":"append('8', 'OJcAC')"},{"ClientId":6,"Start":5113816200,"End":5334432700,"Description":"append('8', 'z-FCl')"},{"ClientId":4,"Start":5113816200,"End":5339889800,"Description":"get('8') -\u003e 'hOuLEeSbo18CoHBogHU8rOD7q8CoHBOJcACrOD7qz-FCl'"},{"ClientId":9,"Start":5333467000,"End":5499007200,"Description":"put('8', 'a3vl8')"},{"ClientId":1,"Start":4163676000,"End":5514731200,"Description":"append('8', 'rOD7q')"},{"ClientId":7,"Start":5662995000,"End":5740611300,"Description":"get('8') -\u003e 'a3vl8'"},{"ClientId":5,"Start":6838719800,"End":7168898000,"Description":"append('8', 'rKvqZ')"},{"ClientId":9,"Start":7174556700,"End":7271550800,"Description":"append('8', 'ZRhlM')"},{"ClientId":9,"Start":8176107600,"End":8264752200,"Description":"append('8', 'wNaqi')"},{"ClientId":8,"Start":8059764900,"End":8340684200,"Description":"get('8') -\u003e 'a3vl8rKvqZZRhlMwNaqi'"},{"ClientId":5,"Start":8135896200,"End":8346769500,"Description":"put('8', 'VsMwJ')"}],"PartialLinearizations":[[{"Index":0,"StateDescription":"hOuLE"},{"Index":1,"StateDescription":"hOuLEeSbo1"},{"Index":2,"StateDescription":"hOuLEeSbo1"},{"Index":5,"StateDescription":"hOuLEeSbo18CoHB"},{"Index":3,"StateDescription":"hOuLEeSbo18CoHBogHU8"},{"Index":10,"StateDescription":"hOuLEeSbo18CoHBogHU8rOD7q"},{"Index":4,"StateDescription":"hOuLEeSbo18CoHBogHU8rOD7q"},{"Index":6,"StateDescription":"hOuLEeSbo18CoHBogHU8rOD7qOJcAC"},{"Index":7,"StateDescription":"hOuLEeSbo18CoHBogHU8rOD7qOJcACz-FCl"},{"Index":9,"StateDescription":"a3vl8"}]],"Largest":{"0":0,"1":0,"10":0,"2":0,"3":0,"4":0,"5":0,"6":0,"7":0,"9":0}},{"History":[{"ClientId":0,"Start":2879467200,"End":2961288900,"Description":"put('9', 'txYx6')"},{"ClientId":1,"Start":3291168300,"End":3392963400,"Description":"get('9') -\u003e 'txYx6'"},{"ClientId":4,"Start":3455466500,"End":3559851800,"Description":"put('9', 'eobR2')"},{"ClientId":0,"Start":3478416200,"End":3577852400,"Description":"get('9') -\u003e 'eobR2'"},{"ClientId":4,"Start":4261649000,"End":4409270500,"Description":"get('9') -\u003e 'eobR2'"},{"ClientId":4,"Start":4500936100,"End":4572027800,"Description":"put('9', 'rPswk')"},{"ClientId":9,"Start":4169994300,"End":4633543800,"Description":"get('9') -\u003e 'rPswk'"},{"ClientId":4,"Start":4757103100,"End":4835087600,"Description":"append('9', 'EhkpD')"},{"ClientId":6,"Start":5334432700,"End":5685752000,"Description":"put('9', 'Jdafv')"},{"ClientId":3,"Start":5092088900,"End":5728985800,"Description":"append('9', 'sImcu')"},{"ClientId":5,"Start":5169115400,"End":5838663200,"Description":"append('9', '7RCXa')"},{"ClientId":5,"Start":6562709300,"End":6674546100,"Description":"get('9') -\u003e 'JdafvsImcu7RCXa'"},{"ClientId":5,"Start":6674546100,"End":6838719800,"Description":"get('9') -\u003e 'JdafvsImcu7RCXa'"},{"ClientId":0,"Start":7353908000,"End":7421350600,"Description":"append('9', 'ZdSmS')"},{"ClientId":9,"Start":7271550800,"End":7769925300,"Description":"get('9') -\u003e 'JdafvsImcu7RCXaZdSmS'"},{"ClientId":8,"Start":7680778100,"End":7775939200,"Description":"append('9', 'xllTL')"},{"ClientId":1,"Start":7826222400,"End":7935280800,"Description":"append('9', 'gK3Qq')"},{"ClientId":9,"Start":7846612100,"End":8176107600,"Description":"append('9', 'h3Yxq')"}],"PartialLinearizations":[[{"Index":0,"StateDescription":"txYx6"},{"Index":1,"StateDescription":"txYx6"},{"Index":2,"StateDescription":"eobR2"},{"Index":3,"StateDescription":"eobR2"},{"Index":4,"StateDescription":"eobR2"},{"Index":5,"StateDescription":"rPswk"},{"Index":6,"StateDescription":"rPswk"},{"Index":7,"StateDescription":"rPswkEhkpD"},{"Index":8,"StateDescription":"Jdafv"},{"Index":9,"StateDescription":"JdafvsImcu"},{"Index":10,"StateDescription":"JdafvsImcu7RCXa"},{"Index":11,"StateDescription":"JdafvsImcu7RCXa"},{"Index":12,"StateDescription":"JdafvsImcu7RCXa"},{"Index":13,"StateDescription":"JdafvsImcu7RCXaZdSmS"},{"Index":14,"StateDescription":"JdafvsImcu7RCXaZdSmS"},{"Index":15,"StateDescription":"JdafvsImcu7RCXaZdSmSxllTL"},{"Index":16,"StateDescription":"JdafvsImcu7RCXaZdSmSxllTLgK3Qq"},{"Index":17,"StateDescription":"JdafvsImcu7RCXaZdSmSxllTLgK3Qqh3Yxq"}]],"Largest":{"0":0,"1":0,"10":0,"11":0,"12":0,"13":0,"14":0,"15":0,"16":0,"17":0,"2":0,"3":0,"4":0,"5":0,"6":0,"7":0,"8":0,"9":0}}]
+
+      render(data)
+    </script>
+  </body>
+</html>

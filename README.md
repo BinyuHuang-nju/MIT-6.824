@@ -40,10 +40,20 @@ MIT 6.824 课程的学习资料 代码更新为2021版
 - 由于对读请求处理逻辑与写请求类似，需要经过多数派的log确认，故该系统满足读写linearizability，但代价是由于ReadRequest的传输和log持久化而带来的更大的网络开销和空间开销。像Zookeeper采用Fast Read的本地读/Sync同步读对读性能有巨大提升，但使得一致性在read上仅满足sequential consistency，这之间的trade-off取决于具体系统的应用场景。  
 
 ### lab4
-- [x]	4 shard controller pass
+- [x]	4A shard controller pass
 	- test: sh ./test.sh
-	- 与lab3类似，client端实现是被简化的，每个client每次仅执行一个请求并等待直至接收到正确回复而不考虑并发发送请求，若加入并发需要server/client端对接收到的请求顺序做进一步判断和处理，否则可能会违背linerizability和FIFO client order。    
-- [ ]	4 shard kv TODO  
+	- 与lab3类似，只不过操作不一样，这里是Move、Join、Leave、Query。主要难点在于相同的序列apply会由于时间、硬件等外部条件的影响，导致状态机收敛不到相同状态，故需要对动作apply限制额外手段确保每个动作带来的前后状态一致。
+	- client端实现是被简化的，每个client每次仅执行一个请求并等待直至接收到正确回复而不考虑并发发送请求，若加入并发需要server/client端对接收到的请求顺序做进一步判断和处理，否则可能会违背linerizability和FIFO client order。    
+- [x]	4B shard kv pass
+	- test: sh test.sh
+	- [ ] (TestConcurrent1、TestUnreliable2 often fail, Get expected... received...)
+	- [ ] (TestUnreliable3 sometimes fails, history is not linearizable) 
+	- [ ] 打log发现高并发场景下PullShards、CleanShards操作的configNum经常不匹配
+	- 以上问题后面会试图debug，一两天定位不到就算了
+	- 开了4个循环线程raft log applier、pull config线程、pull shards线程、clean shards线程。从config N到N+1存在shards转移关系的两group之间的流程为下图:
+
+
+![流程图](result/LAB4B.JPG)
 
 ## 课程安排 Schedule
 

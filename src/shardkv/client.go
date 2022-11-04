@@ -105,7 +105,7 @@ func (ck *Clerk) makePutAppendArgs(key string, value string, op string) PutAppen
 //
 func (ck *Clerk) Get(key string) string {
 	args := ck.makeGetArgs(key)
-	DPrintf("Clerk [%v]: send request Get(key %v) with commandId %d to replica group",
+	DPrintf("Clerk [%v]: send request Get(key %v) with commandId %d to replica group \n",
 		args.ClientId, args.Key, args.CommandId)
 
 	for {
@@ -118,6 +118,8 @@ func (ck *Clerk) Get(key string) string {
 				var reply GetReply
 				ok := srv.Call("ShardKV.Get", &args, &reply)
 				if ok && (reply.Err == OK || reply.Err == ErrNoKey) {
+					DPrintf("Clerk [%v]: complete request Get(key %v) with commandId %d to replica group with id {%d, %v} \n",
+						args.ClientId, args.Key, args.CommandId, gid, servers[si])
 					return reply.Value
 				}
 				if ok && (reply.Err == ErrWrongGroup) {
@@ -140,7 +142,7 @@ func (ck *Clerk) Get(key string) string {
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	args := ck.makePutAppendArgs(key, value, op)
-	DPrintf("Clerk [%v]: send request %v(key %v, value %v) with commandId %d to replica group",
+	DPrintf("Clerk [%v]: send request %v(key %v, value %v) with commandId %d to replica group \n",
 		args.ClientId, args.Op, args.Key, args.Value, args.CommandId)
 
 	for {
@@ -152,6 +154,8 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 				var reply PutAppendReply
 				ok := srv.Call("ShardKV.PutAppend", &args, &reply)
 				if ok && reply.Err == OK {
+					DPrintf("Clerk [%v]: complete request %v(key %v, value %v) with commandId %d to replica group with id {%d, %v} \n",
+						args.ClientId, args.Op, args.Key, args.Value, args.CommandId, gid, servers[si])
 					return
 				}
 				if ok && reply.Err == ErrWrongGroup {

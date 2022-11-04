@@ -20,9 +20,9 @@ const (
 	OpAppend = "Append"
 	REQUEST_TIMEOUT = time.Duration(time.Millisecond * 500)
 	APPLY_INTERVAL = 5 * time.Millisecond
-	PULL_CONFIG_INTERVAL = 100 * time.Millisecond
-	PULL_SHARD_INTERVAL = 100 * time.Millisecond
-	CLEAN_SHARD_INTERVAL = 100 * time.Millisecond
+	PULL_CONFIG_INTERVAL = 80 * time.Millisecond
+	PULL_SHARD_INTERVAL = 80 * time.Millisecond
+	CLEAN_SHARD_INTERVAL = 80 * time.Millisecond
 )
 
 type OpType uint8
@@ -53,7 +53,8 @@ type PullShards struct {
 }
 type CleanShards struct {
 	ConfigNum  int
-	ShardId	   int
+	ShardId	   []int
+	Push       bool  // if Push, we need to reply msg; else, just apply
 }
 
 type ShardStatus uint8
@@ -241,7 +242,8 @@ func (kv *ShardKV) getNotifyCh(index int) (chan NotifyMsg, bool) {
 	// TODO: if need to add lock
 	ch, ok := kv.notifyChs[index]
 	if !ok {
-		DPrintf("{Node %d}{Group %d}: applier wants to get NotifyCh[%d] but it not exists. \n", kv.me, kv.gid, index)
+		DPrintf("{Node %d}{Group %d}: applier wants to get NotifyCh[%d] but it not exists, current lastApplied %d. \n",
+			kv.me, kv.gid, index, kv.lastApplied)
 	}
 	return ch, ok
 }
@@ -264,12 +266,16 @@ func (kv *ShardKV) processOpRequest(op Op) NotifyMsg {
 		return not
 	}
 	ch := kv.generateNotifyCh(index)
+	DPrintf("{Node %d}{Group %d}: process op request (index %d, op %v). \n",
+		kv.me, kv.gid, index, op)
 	t := time.NewTimer(REQUEST_TIMEOUT)
 	select {
 	case not = <-ch :
 		break
 	case <-t.C:
 		not.Error, not.Value = ErrTimeout, ""
+		DPrintf("{Node %d}{Group %d}: process op request (index %d, op %v) but timeout. \n",
+			kv.me, kv.gid, index, op)
 		break
 	}
 	go kv.deleteOutdatedNotifyCh(index)
@@ -428,11 +434,14 @@ func (kv *ShardKV) applyConfiguration(nextConfig shardctrler.Config) {
 				return
 			}
 		}
-		DPrintf("{Node %d}{Group %d}: apply config from %v to %v \n",
-			kv.me, kv.gid, kv.curConfig, nextConfig)
+		DPrintf("{Node %d}{Group %d}: apply config from %v to %v with config num %d. \n",
+			kv.me, kv.gid, kv.curConfig, nextConfig, nextConfig.Num)
 		kv.updateShardStatus(nextConfig)
 		kv.lastConfig = kv.curConfig.Copy()
 		kv.curConfig = nextConfig.Copy()
+	} else {
+		DPrintf("{Node %d}{Group %d}: encounter duplicated configuration with config num %d and %d. \n",
+			kv.me, kv.gid, kv.curConfig.Num, nextConfig.Num)
 	}
 }
 
@@ -457,11 +466,38 @@ func (kv *ShardKV) applyPullShards(ps PullShards) {
 				kv.lastOprs[clientId] = ar
 			}
 		}
-		DPrintf("{Node %d}{Group %d}: apply pull shards with shardId %v. \n",
-			kv.me, kv.gid, shardIds)
+		DPrintf("{Node %d}{Group %d}: apply pull shards with shardIds %v and config num %d. \n",
+			kv.me, kv.gid, shardIds, ps.ConfigNum)
 	} else {
 		DPrintf("{Node %d}{Group %d}: apply pull shards while current config num %d not equals to applied num %d \n",
 			kv.me, kv.gid, kv.curConfig.Num, ps.ConfigNum)
+	}
+}
+
+func (kv *ShardKV) applyCleanShards(cs CleanShards) {
+	// locked in applier
+	if cs.ConfigNum == kv.curConfig.Num {
+		for _, shardId := range cs.ShardId {
+			if kv.dbStatus[shardId] == GCing {
+				if cs.Push {
+					fmt.Printf("{Node %d}{Group %d}: shard status GCing while cs.Push == true. \n",
+						kv.me, kv.gid)
+				}
+				kv.dbStatus[shardId] = Serving
+			} else if kv.dbStatus[shardId] == BePulling {
+				if !cs.Push {
+					fmt.Printf("{Node %d}{Group %d}: shard status BePulling while cs.Push == false. \n",
+						kv.me, kv.gid)
+				}
+				kv.kvDB[shardId] = make(map[string]string)
+				kv.dbStatus[shardId] = Serving
+			} else if kv.dbStatus[shardId] == Pulling {
+				fmt.Printf("{Node %d}{Group %d}: shard status %v including Pulling when applying CleanShards. \n",
+					kv.me, kv.gid, kv.dbStatus)
+			}
+		}
+		DPrintf("{Node %d}{Group %d}: apply clean shards with shardIds %v and config num %d. \n",
+			kv.me, kv.gid, cs.ShardId, cs.ConfigNum)
 	}
 }
 
@@ -483,6 +519,11 @@ func (kv *ShardKV) applier() {
 				case int:
 					// since we add a no-op(int) command when a peer becomes raft leader,
 					// we should not consider this command
+					digit := msg.Command.(int)
+					if digit != 0 {
+						fmt.Printf("{Node %d}{Group %d}: msg.Command.(int) %d not zero. \n",
+							kv.me, kv.gid, digit)
+					}
 					term := msg.CommandTerm
 					if kv.maxSeenTerm >= term {
 						fmt.Printf("{Node %d}{Group %d}: msg.commandTerm %d <= kv.maxSeenTerm %d. \n", kv.me,
@@ -507,7 +548,7 @@ func (kv *ShardKV) applier() {
 						}
 					} else {
 						// to let corresponding channel not wait too long, return ErrWrongLeader
-						if ch, ok := kv.getNotifyCh(msg.CommandIndex); ok {
+						if ch, ok := kv.notifyChs[msg.CommandIndex]; ok {
 							not.Error = ErrWrongLeader
 							ch <- not
 						}
@@ -520,7 +561,27 @@ func (kv *ShardKV) applier() {
 					ps := msg.Command.(PullShards)
 					kv.applyPullShards(ps)
 				case CleanShards:
-					// cs := msg.Command.(CleanShards)
+					cs := msg.Command.(CleanShards)
+					kv.applyCleanShards(cs)
+					if cs.Push {
+						if currentTerm, isLeader := kv.rf.GetState(); isLeader && currentTerm == msg.CommandTerm {
+							if ch, ok := kv.getNotifyCh(msg.CommandIndex); ok {
+								not := NotifyMsg{
+									Error: OK,
+									Value: "",
+								}
+								ch <- not
+							}
+						} else {
+							if ch, ok := kv.notifyChs[msg.CommandIndex]; ok {
+								not := NotifyMsg{
+									Error: ErrWrongLeader,
+									Value: "",
+								}
+								ch <- not
+							}
+						}
+					}
 
 				default:
 					// TODO: other types of message
@@ -573,13 +634,14 @@ func (kv *ShardKV) pullNewConfiguration() {
 					break
 				}
 			}
-			currentConfigNum := kv.curConfig.Num
+			currentConfig := kv.curConfig.Copy()
+			currentConfigNum := currentConfig.Num
 			kv.mu.Unlock()
 			if canPerformNextConfig {
 				nextConfig := kv.scc.Query(currentConfigNum + 1)
 				if nextConfig.Num == currentConfigNum + 1 {
 					DPrintf("{Node %d}{Group %d}: pull new config %v, while current config %v \n",
-						kv.me, kv.gid, nextConfig, kv.curConfig)
+						kv.me, kv.gid, nextConfig, currentConfig)
 					kv.processConfRequest(nextConfig)
 				}
 			}
@@ -606,25 +668,26 @@ func (kv *ShardKV) getShardIdByStatus(status ShardStatus) map[int][]int {
 }
 
 func (kv *ShardKV) PullShardsReceiver(args *MigrateDataArgs, reply *MigrateDataReply) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+
 	if _, isLeader := kv.rf.GetState(); !isLeader {
 		reply.Err = ErrWrongLeader
 		return
 	}
-	kv.mu.Lock()
-	defer kv.mu.Unlock()
 
 	if kv.curConfig.Num < args.ConfigNum {
 		reply.Err, reply.ConfigNum = ErrNotReady, kv.curConfig.Num
 		return
 	} else if kv.curConfig.Num > args.ConfigNum {
-		fmt.Printf("{Node %d}{Group %d}: called PushShards while my config num %d is bigger than caller's config num %d",
+		fmt.Printf("{Node %d}{Group %d}: called PushShards while my config num %d is greater than caller's config num %d. \n",
 			kv.me, kv.gid, kv.curConfig.Num, args.ConfigNum)
 	}
 
 	shardsDB := make(map[int]map[string]string)
 	for _, shardId := range args.ShardIds {
 		if kv.dbStatus[shardId] == Pulling {
-			fmt.Printf("{Node %d}{Group %d}: called PushShards while dbStatus %v and pull shards %v",
+			fmt.Printf("{Node %d}{Group %d}: called PushShards while dbStatus %v and pull shards %v. \n",
 				kv.me, kv.gid, kv.dbStatus, args.ShardIds)
 		}
 		shardsDB[shardId] = dbDeepCopy(kv.kvDB[shardId])
@@ -659,7 +722,7 @@ func (kv *ShardKV) pullShards() {
 	for !kv.killed() {
 		if _, isLeader := kv.rf.GetState(); isLeader {
 			kv.mu.Lock()
-			DPrintf("{Node %d}{Group %d}: [pullShards] current shard status is %v. \n", kv.me, kv.gid, kv.dbStatus)
+			DPrintf("{Node %d}{Group %d}: <pullShards> current shard status is %v. \n", kv.me, kv.gid, kv.dbStatus)
 			gid2shardIds := kv.getShardIdByStatus(Pulling)
 			var wg sync.WaitGroup
 			for gid, shardIds := range gid2shardIds {
@@ -678,6 +741,7 @@ func (kv *ShardKV) pullShards() {
 						ok := srv.Call("ShardKV.PullShardsReceiver", &pullShardsArgs, &pullShardsReply)
 						if ok && pullShardsReply.Err == OK {
 							kv.processPullShardsRequest(pullShardsReply)
+							break
 						}
 					}
 				}(kv.lastConfig.Groups[gid], kv.curConfig.Num, shardIds)
@@ -689,19 +753,89 @@ func (kv *ShardKV) pullShards() {
 	}
 }
 
-func (kv *ShardKV) CleanShardsReceiver(args *CleanShardArgs, reply *CleanShardReply) {
-
+func (kv *ShardKV) processCleanShardsRequest(cs CleanShards) NotifyMsg {
+	not := NotifyMsg{}
+	index, _, isLeader := kv.rf.Start(cs)
+	if !isLeader {
+		not.Error = ErrWrongLeader
+		return not
+	}
+	ch := kv.generateNotifyCh(index)
+	DPrintf("{Node %d}{Group %d}: process clean shards request (index %d, op %v). \n",
+		kv.me, kv.gid, index, cs)
+	t := time.NewTimer(REQUEST_TIMEOUT)
+	select {
+	case not = <-ch :
+		break
+	case <-t.C:
+		not.Error, not.Value = ErrTimeout, ""
+		DPrintf("{Node %d}{Group %d}: process clean shards request (index %d, op %v) but timeout. \n",
+			kv.me, kv.gid, index, cs)
+		break
+	}
+	go kv.deleteOutdatedNotifyCh(index)
+	return not
 }
 
-func (kv *ShardKV) processCleanShardsRequest(reply CleanShardReply) {
+func (kv *ShardKV) CleanShardsReceiver(args *CleanShardArgs, reply *CleanShardReply) {
+	kv.mu.Lock()
 
+	if _, isLeader := kv.rf.GetState(); !isLeader {
+		kv.mu.Unlock()
+		reply.Err, reply.ConfigNum = ErrWrongLeader, args.ConfigNum
+		return
+	}
+
+	if kv.curConfig.Num < args.ConfigNum {
+		fmt.Printf("{Node %d}{Group %d}: called CleanShards while my config num %d is lower than caller's config num %d.\n",
+			kv.me, kv.gid, kv.curConfig.Num, args.ConfigNum)
+	} else if kv.curConfig.Num > args.ConfigNum {
+		// encounter duplicated rpc
+		kv.mu.Unlock()
+		reply.Err, reply.ConfigNum = OK, args.ConfigNum
+		return
+	}
+
+	hasCleaned := false
+	for _, shardId := range args.ShardIds {
+		if kv.dbStatus[shardId] == Serving {
+			hasCleaned = true
+		} else if hasCleaned {
+			fmt.Printf("{Node %d}{Group %d}: called CleanShards while status %v in shardIds %v not equivalent. \n",
+				kv.me, kv.gid, kv.dbStatus, args.ShardIds)
+		}
+	}
+	if hasCleaned {
+		kv.mu.Unlock()
+		reply.Err, reply.ConfigNum = OK, args.ConfigNum
+		return
+	}
+
+	kv.mu.Unlock()
+	cs := CleanShards{
+		ConfigNum: args.ConfigNum,
+		ShardId:   args.ShardIds,
+		Push:      true,
+	}
+	not := kv.processCleanShardsRequest(cs)
+	reply.Err, reply.ConfigNum = not.Error, args.ConfigNum
+}
+
+func (kv *ShardKV) processCleanShards(reply CleanShardReply, shardIds []int) {
+	cs := CleanShards{
+		ConfigNum: reply.ConfigNum,
+		ShardId:   shardIds,
+		Push:      false,
+	}
+	kv.rf.Start(cs)
 }
 
 func (kv *ShardKV) cleanShards() {
 	for !kv.killed() {
 		if _, isLeader := kv.rf.GetState(); isLeader {
 			kv.mu.Lock()
-			DPrintf("{Node %d}{Group %d}: [cleanShards] current shard status is %v. \n", kv.me, kv.gid, kv.dbStatus)
+			DPrintf("{Node %d}{Group %d}: <cleanShards> current shard status is %v. \n",
+				kv.me, kv.gid, kv.dbStatus)
 			gid2shardIds := kv.getShardIdByStatus(GCing)
 			var wg sync.WaitGroup
 			for gid, shardIds := range gid2shardIds {
@@ -719,7 +853,8 @@ func (kv *ShardKV) cleanShards() {
 						srv := kv.make_end(server)
 						ok := srv.Call("ShardKV.CleanShardsReceiver", &cleanShardsArgs, &cleanShardsReply)
 						if ok && cleanShardsReply.Err == OK {
-							kv.processCleanShardsRequest(cleanShardsReply)
+							kv.processCleanShards(cleanShardsReply, shardIds)
+							break
 						}
 					}
 				}(kv.lastConfig.Groups[gid], kv.curConfig.Num, shardIds)
@@ -769,6 +904,8 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	labgob.Register(shardctrler.Config{})
 	labgob.Register(MigrateDataArgs{})
 	labgob.Register(MigrateDataReply{})
+	labgob.Register(CleanShardArgs{})
+	labgob.Register(CleanShardReply{})
 
 	kv := new(ShardKV)
 	kv.me = me
