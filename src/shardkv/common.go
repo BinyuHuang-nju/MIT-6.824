@@ -83,7 +83,7 @@ func dbDeepCopy(db map[string]string) map[string]string {
 	return res
 }
 
-const Debug = true
+const Debug = false
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug {

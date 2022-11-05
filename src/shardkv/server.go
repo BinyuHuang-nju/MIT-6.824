@@ -20,8 +20,8 @@ const (
 	OpAppend = "Append"
 	REQUEST_TIMEOUT = time.Duration(time.Millisecond * 500)
 	APPLY_INTERVAL = 5 * time.Millisecond
-	PULL_CONFIG_INTERVAL = 80 * time.Millisecond
-	PULL_SHARD_INTERVAL = 80 * time.Millisecond
+	PULL_CONFIG_INTERVAL = 50 * time.Millisecond
+	PULL_SHARD_INTERVAL = 35 * time.Millisecond
 	CLEAN_SHARD_INTERVAL = 80 * time.Millisecond
 )
 
@@ -308,12 +308,13 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 		kv.mu.Unlock()
 		return
 	}
+	kv.mu.Unlock()
+
 	if _, isLeader, _ := kv.rf.GetStateAndLeader(); !isLeader {
 		reply.Err = ErrWrongLeader
-		kv.mu.Unlock()
 		return
 	}
-	kv.mu.Unlock()
+
 	op := kv.makeOp(args)
 	not := kv.processOpRequest(op)
 	reply.Err, reply.Value = not.Error, not.Value
@@ -335,13 +336,13 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		kv.mu.Unlock()
 		return
 	}
+	kv.mu.Unlock()
 	// return ErrWrongLeader to let client find current leader
 	if _, isLeader, _ := kv.rf.GetStateAndLeader(); !isLeader {
 		reply.Err = ErrWrongLeader
-		kv.mu.Unlock()
 		return
 	}
-	kv.mu.Unlock()
+
 	op := kv.makeOp(args)
 	not := kv.processOpRequest(op)
 	reply.Err = not.Error
@@ -668,13 +669,13 @@ func (kv *ShardKV) getShardIdByStatus(status ShardStatus) map[int][]int {
 }
 
 func (kv *ShardKV) PullShardsReceiver(args *MigrateDataArgs, reply *MigrateDataReply) {
-	kv.mu.Lock()
-	defer kv.mu.Unlock()
-
 	if _, isLeader := kv.rf.GetState(); !isLeader {
 		reply.Err = ErrWrongLeader
 		return
 	}
+
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
 
 	if kv.curConfig.Num < args.ConfigNum {
 		reply.Err, reply.ConfigNum = ErrNotReady, kv.curConfig.Num
@@ -778,14 +779,15 @@ func (kv *ShardKV) processCleanShardsRequest(cs CleanShards) NotifyMsg {
 }
 
 func (kv *ShardKV) CleanShardsReceiver(args *CleanShardArgs, reply *CleanShardReply) {
-	kv.mu.Lock()
-
+	// rf.GetState() should not be locked in ShardKV,
+	// for in some cases rf locked, and here shardKV locked,
+	// which causes deadlock
 	if _, isLeader := kv.rf.GetState(); !isLeader {
-		kv.mu.Unlock()
 		reply.Err, reply.ConfigNum = ErrWrongLeader, args.ConfigNum
 		return
 	}
 
+	kv.mu.Lock()
 	if kv.curConfig.Num < args.ConfigNum {
 		fmt.Printf("{Node %d}{Group %d}: called CleanShards while my config num %d is lower than caller's config num %d.\n",
 			kv.me, kv.gid, kv.curConfig.Num, args.ConfigNum)
