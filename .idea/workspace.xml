@@ -7,7 +7,7 @@
     <list default="true" id="6338b902-87fa-4349-8447-aa10da898558" name="Default Changelist" comment="">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/shardkv/client.go" beforeDir="false" afterPath="$PROJECT_DIR$/src/shardkv/client.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/shardkv/common.go" beforeDir="false" afterPath="$PROJECT_DIR$/src/shardkv/common.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/shardkv/server.go" beforeDir="false" afterPath="$PROJECT_DIR$/src/shardkv/server.go" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -56,8 +56,8 @@
     <property name="last_opened_file_path" value="$PROJECT_DIR$" />
     <property name="settings.editor.selected.configurable" value="com.goide.configuration.GoLibrariesConfigurableProvider" />
   </component>
-  <component name="RunManager" selected="Go Test.TestStaticShards in 6.824/shardkv (1)">
-    <configuration name="TestConcurrent1 in 6.824/shardkv" type="GoTestRunConfiguration" factoryName="Go Test" temporary="true" nameIsGenerated="true">
+  <component name="RunManager" selected="Go Test.TestUnreliable2 in 6.824/shardkv (1)">
+    <configuration name="TestConcurrent2 in 6.824/shardkv (1)" type="GoTestRunConfiguration" factoryName="Go Test" temporary="true" nameIsGenerated="true">
       <module name="6.824" />
       <working_directory value="$PROJECT_DIR$/src/shardkv" />
       <framework value="gotest" />
@@ -65,10 +65,10 @@
       <package value="6.824/shardkv" />
       <directory value="$PROJECT_DIR$" />
       <filePath value="$PROJECT_DIR$" />
-      <pattern value="^\QTestConcurrent1\E$" />
+      <pattern value="^\QTestConcurrent2\E$" />
       <method v="2" />
     </configuration>
-    <configuration name="TestJoinLeave in 6.824/shardkv" type="GoTestRunConfiguration" factoryName="Go Test" temporary="true" nameIsGenerated="true">
+    <configuration name="TestConcurrent3 in 6.824/shardkv (1)" type="GoTestRunConfiguration" factoryName="Go Test" temporary="true" nameIsGenerated="true">
       <module name="6.824" />
       <working_directory value="$PROJECT_DIR$/src/shardkv" />
       <framework value="gotest" />
@@ -76,10 +76,10 @@
       <package value="6.824/shardkv" />
       <directory value="$PROJECT_DIR$" />
       <filePath value="$PROJECT_DIR$" />
-      <pattern value="^\QTestJoinLeave\E$" />
+      <pattern value="^\QTestConcurrent3\E$" />
       <method v="2" />
     </configuration>
-    <configuration name="TestMissChange in 6.824/shardkv" type="GoTestRunConfiguration" factoryName="Go Test" temporary="true" nameIsGenerated="true">
+    <configuration name="TestConcurrent3 in 6.824/shardkv" type="GoTestRunConfiguration" factoryName="Go Test" temporary="true" nameIsGenerated="true">
       <module name="6.824" />
       <working_directory value="$PROJECT_DIR$/src/shardkv" />
       <framework value="gotest" />
@@ -87,10 +87,10 @@
       <package value="6.824/shardkv" />
       <directory value="$PROJECT_DIR$" />
       <filePath value="$PROJECT_DIR$" />
-      <pattern value="^\QTestMissChange\E$" />
+      <pattern value="^\QTestConcurrent3\E$" />
       <method v="2" />
     </configuration>
-    <configuration name="TestSnapshot in 6.824/shardkv" type="GoTestRunConfiguration" factoryName="Go Test" temporary="true" nameIsGenerated="true">
+    <configuration name="TestUnreliable2 in 6.824/shardkv (1)" type="GoTestRunConfiguration" factoryName="Go Test" temporary="true" nameIsGenerated="true">
       <module name="6.824" />
       <working_directory value="$PROJECT_DIR$/src/shardkv" />
       <framework value="gotest" />
@@ -98,10 +98,10 @@
       <package value="6.824/shardkv" />
       <directory value="$PROJECT_DIR$" />
       <filePath value="$PROJECT_DIR$" />
-      <pattern value="^\QTestSnapshot\E$" />
+      <pattern value="^\QTestUnreliable2\E$" />
       <method v="2" />
     </configuration>
-    <configuration name="TestStaticShards in 6.824/shardkv (1)" type="GoTestRunConfiguration" factoryName="Go Test" temporary="true" nameIsGenerated="true">
+    <configuration name="TestUnreliable2 in 6.824/shardkv" type="GoTestRunConfiguration" factoryName="Go Test" temporary="true" nameIsGenerated="true">
       <module name="6.824" />
       <working_directory value="$PROJECT_DIR$/src/shardkv" />
       <framework value="gotest" />
@@ -109,16 +109,16 @@
       <package value="6.824/shardkv" />
       <directory value="$PROJECT_DIR$" />
       <filePath value="$PROJECT_DIR$" />
-      <pattern value="^\QTestStaticShards\E$" />
+      <pattern value="^\QTestUnreliable2\E$" />
       <method v="2" />
     </configuration>
     <recent_temporary>
       <list>
-        <item itemvalue="Go Test.TestStaticShards in 6.824/shardkv (1)" />
-        <item itemvalue="Go Test.TestConcurrent1 in 6.824/shardkv" />
-        <item itemvalue="Go Test.TestMissChange in 6.824/shardkv" />
-        <item itemvalue="Go Test.TestSnapshot in 6.824/shardkv" />
-        <item itemvalue="Go Test.TestJoinLeave in 6.824/shardkv" />
+        <item itemvalue="Go Test.TestUnreliable2 in 6.824/shardkv (1)" />
+        <item itemvalue="Go Test.TestConcurrent2 in 6.824/shardkv (1)" />
+        <item itemvalue="Go Test.TestUnreliable2 in 6.824/shardkv" />
+        <item itemvalue="Go Test.TestConcurrent3 in 6.824/shardkv (1)" />
+        <item itemvalue="Go Test.TestConcurrent3 in 6.824/shardkv" />
       </list>
     </recent_temporary>
   </component>

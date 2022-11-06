@@ -45,12 +45,12 @@ MIT 6.824 课程的学习资料 代码更新为2021版
 	- 与lab3类似，只不过操作不一样，这里是Move、Join、Leave、Query。主要难点在于相同的序列apply会由于时间、硬件等外部条件的影响，导致状态机收敛不到相同状态，故需要对动作apply限制额外手段确保每个动作带来的前后状态一致。
 	- client端实现是被简化的，每个client每次仅执行一个请求并等待直至接收到正确回复而不考虑并发发送请求，若加入并发需要server/client端对接收到的请求顺序做进一步判断和处理，否则可能会违背linerizability和FIFO client order。    
 - [x]	4B shard kv pass
-	- test: sh test.sh
-	- [ ] (TestConcurrent1、TestUnreliable2 often fail, Get expected... received...)
-	- [ ] (TestUnreliable3 sometimes fails, history is not linearizable) 
-	- [ ] 打log发现高并发场景下PullShards、CleanShards操作的configNum经常不匹配
-	- 以上问题后面会试图debug，一两天定位不到就算了
-	- 开了4个循环线程raft log applier、pull config线程、pull shards线程、clean shards线程。从config N到N+1存在shards转移关系的两group之间的流程为下图:
+    - test: sh test.sh
+    - [x] (TestConcurrent1、TestUnreliable2 often fail, Get expected... received...) 已解决，发现偶有kv对被重复apply，最后定位到去重表lastOprs在分片迁移中没拷贝完整
+	- [x] (TestUnreliable3 sometimes fails, history is not linearizable) 已解决，问题同上 去重表拷贝问题
+	- [x] (打log发现高并发场景下PullShards、CleanShards操作的configNum经常不匹配) 根据分析为合理现象，因为超过半数副本宕机，config没有得到持久化
+
+	- 开了4个循环线程raft log applier、pull config线程、pull shards线程、clean shards线程。其中后三者的区别在于pull config是向shardctrler的client请求Query；pull shards是向其他group的raft leader拉取数据，但对方group不需要调用Start，仅作回复，因为不改变对方的状态；clean shards是向其他group的raft leader交代操作，需要对方做raft apply clean操作后回复，再在自己本地做raft apply，因为需要改变对方的状态。从config N到N+1存在shards转移关系的两group之间的流程为下图:
 
 
 ![流程图](result/LAB4B.JPG)
