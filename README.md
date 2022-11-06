@@ -50,7 +50,7 @@ MIT 6.824 课程的学习资料 代码更新为2021版
 	- [x] (TestUnreliable3 sometimes fails, history is not linearizable) 已解决，问题同上 去重表拷贝问题
 	- [x] (打log发现高并发场景下PullShards、CleanShards操作的configNum经常不匹配) 根据分析为合理现象，因为超过半数副本宕机，config没有得到持久化
 
-	- 开了4个循环线程raft log applier、pull config线程、pull shards线程、clean shards线程。其中后三者的区别在于pull config是向shardctrler的client请求Query；pull shards是向其他group的raft leader拉取数据，但对方group不需要调用Start，仅作回复，因为不改变对方的状态；clean shards是向其他group的raft leader交代操作，需要对方做raft apply clean操作后回复，再在自己本地做raft apply，因为需要改变对方的状态。从config N到N+1存在shards转移关系的两group之间的流程为下图:
+- 开了4个循环线程raft log applier、pull config线程、pull shards线程、clean shards线程。其中后三者的区别在于pull config是向shardctrler的client请求Query；pull shards是向其他group的raft leader拉取数据，但对方group不需要调用Start，仅作回复，因为不改变对方的状态；clean shards是向其他group的raft leader交代操作，需要对方做raft apply clean操作后回复，再在自己本地做raft apply，因为需要改变对方的状态。从config N到N+1存在shards转移关系的两group之间的流程为下图:
 
 
 ![流程图](result/LAB4B.JPG)
