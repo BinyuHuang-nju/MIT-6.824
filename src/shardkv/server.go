@@ -1,6 +1,5 @@
 package shardkv
 
-
 import (
 	"6.824/labrpc"
 	"6.824/shardctrler"
@@ -127,6 +126,8 @@ func (kv *ShardKV) encodeSnapshot() []byte {
 	e.Encode(kv.dbStatus)
 
 	data := w.Bytes()
+	// DPrintf("{Node %d}{Group %d}: encode snapshot in shardkv succeed, current config num %d.",
+	//  	kv.me, kv.gid, kv.curConfig.Num)
 	return data
 }
 
@@ -170,7 +171,8 @@ func (kv *ShardKV) readSnapshotPersist(data []byte) {
 		kv.kvDB = db
 		kv.lastOprs = lo
 		kv.dbStatus = st
-		DPrintf("{Node %d}{Group %d}: read snapshot in shardkv succeed.", kv.me, kv.gid)
+		DPrintf("{Node %d}{Group %d}: read snapshot in shardkv succeed, current config num %d.",
+			kv.me, kv.gid, kv.curConfig.Num)
 	}
 }
 
@@ -184,8 +186,13 @@ func (kv *ShardKV) executePut(key, value string, shardId int) Err {
 	kv.kvDB[shardId][key] = value
 	return OK
 }
-func (kv *ShardKV) executeAppend(key, value string, shardId int) Err {
+func (kv *ShardKV) executeAppend(key, value string, shardId int, clientId int64) Err {
+	// if val, ok := kv.kvDB[shardId][key]; ok && strings.HasSuffix(val, value) {
+	// 	return OK
+	// }
 	kv.kvDB[shardId][key] += value
+	DPrintf("{Node %d}{Group %d}: apply Append op(Key %v, Val %v, shard %d), newValue = %v, lastOpr %v",
+		kv.me, kv.gid, key, value, shardId, kv.kvDB[shardId][key], kv.lastOprs[clientId])
 	return OK
 }
 
@@ -198,7 +205,7 @@ func (kv *ShardKV) applyLogToDatabase(op Op, shardId int) (Err, string) {
 	case OpPut:
 		err = kv.executePut(op.Key, op.Value, shardId)
 	case OpAppend:
-		err = kv.executeAppend(op.Key, op.Value, shardId)
+		err = kv.executeAppend(op.Key, op.Value, shardId, op.ClientId)
 	default:
 		log.Fatalf("unknown op type %v in applyLogToDatabase", op.Opr)
 	}
@@ -467,8 +474,8 @@ func (kv *ShardKV) applyPullShards(ps PullShards) {
 				kv.lastOprs[clientId] = ar
 			}
 		}
-		DPrintf("{Node %d}{Group %d}: apply pull shards with shardIds %v and config num %d. \n",
-			kv.me, kv.gid, shardIds, ps.ConfigNum)
+		DPrintf("{Node %d}{Group %d}: apply pull shards with shardIds %v and config num %d, and lastOprs %v. \n",
+			kv.me, kv.gid, shardIds, ps.ConfigNum, kv.lastOprs)
 	} else {
 		DPrintf("{Node %d}{Group %d}: apply pull shards while current config num %d not equals to applied num %d \n",
 			kv.me, kv.gid, kv.curConfig.Num, ps.ConfigNum)
@@ -696,7 +703,7 @@ func (kv *ShardKV) PullShardsReceiver(args *MigrateDataArgs, reply *MigrateDataR
 	reply.KvDB = shardsDB
 
 	lastOp := make(map[int64]ApplyRecord)
-	for clientId, ar := range lastOp {
+	for clientId, ar := range kv.lastOprs {
 		lastOp[clientId] = ar
 	}
 	reply.LastOpr = lastOp
